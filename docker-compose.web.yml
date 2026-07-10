@@ -1,0 +1,20 @@
+name: meeting-web-service
+
+services:
+  meeting-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: meeting-web-service
+    env_file:
+      - path: .env
+        required: false
+      - path: ${WEB_ENV_FILE:-.env.production}
+        required: false
+    ports:
+      - "3000:3000"
+    environment:
+      ROLE: web
+      NODE_ENV: production
+      IS_DOCKER: "true"
+    restart: unless-stopped

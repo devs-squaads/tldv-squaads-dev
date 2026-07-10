@@ -1,0 +1,8 @@
+{
+  "name": "@meeting-bot/extension",
+  "private": true,
+  "scripts": {
+    "build": "bun run ./build.ts",
+    "typecheck": "bunx tsc -p tsconfig.json --noEmit"
+  }
+}

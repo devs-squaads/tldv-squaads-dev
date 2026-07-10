@@ -1,0 +1,50 @@
+FROM oven/bun:1 AS bun-base
+
+WORKDIR /app
+
+FROM bun-base AS build-deps
+
+RUN mkdir -p /app/apps/web /app/packages/shared
+
+COPY apps/web/package.json ./apps/web/package.json
+COPY apps/web/package.root-web.json ./apps/web/package.root-web.json
+COPY packages/shared/package.json ./packages/shared/package.json
+COPY tsconfig.base.json ./tsconfig.base.json
+COPY drizzle.config.ts ./drizzle.config.ts
+
+# Reduced workspace root for the production web image.
+# The build only needs the web app, the shared package, and the root-level build tooling Next/Tailwind expect.
+COPY apps/web/package.root-web.json ./package.json
+
+RUN bun install
+
+FROM build-deps AS builder
+
+COPY apps/web ./apps/web
+COPY packages/shared ./packages/shared
+COPY scripts/entrypoint.web.sh ./scripts/entrypoint.web.sh
+COPY drizzle ./drizzle
+
+ARG DATABASE_URL=postgresql://postgres:postgres@localhost:5432/meeting_bot
+ENV DATABASE_URL=$DATABASE_URL
+ENV NODE_ENV=production
+RUN bun run --cwd apps/web build
+
+FROM node:20-bookworm-slim AS web
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --from=builder /app/scripts/entrypoint.web.sh ./scripts/entrypoint.web.sh
+COPY --from=builder /app/apps/web/.next/standalone ./apps/web/.next/standalone
+# Standalone server resolves static assets relative to its own app tree at runtime.
+COPY --from=builder /app/apps/web/public ./apps/web/.next/standalone/apps/web/public
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/standalone/apps/web/.next/static
+
+EXPOSE 3000
+
+RUN sed -i 's/\r$//' /app/scripts/entrypoint.web.sh && \
+    chmod +x /app/scripts/entrypoint.web.sh
+
+CMD ["/bin/bash", "-lc", "sed -i 's/\\r$//' /app/scripts/entrypoint.web.sh && exec /app/scripts/entrypoint.web.sh"]

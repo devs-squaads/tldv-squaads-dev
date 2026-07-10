@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./apps/worker/src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts"
+  ],
+  "exclude": ["node_modules", "extension", "apps", "packages"]
+}

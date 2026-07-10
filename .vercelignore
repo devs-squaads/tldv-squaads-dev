@@ -1,0 +1,46 @@
+.git
+.gitattributes
+.gitignore
+.idea
+.vscode
+
+.next
+**/.next
+node_modules
+**/node_modules
+out
+**/out
+
+.env
+.env.*
+!.env.development.example
+!.env.production.example
+
+*.log
+.DS_Store
+**/.DS_Store
+
+# Monorepo non-web workspaces
+apps/worker
+apps/extension
+
+# Local-only artifacts
+resources
+scripts/local-*
+local.db
+tsconfig.tsbuildinfo
+**/*.tsbuildinfo
+
+# Repo infra/docs not required for Vercel build
+docker-compose*.yml
+Dockerfile.worker
+Dockerfile.worker.dockerignore
+Dockerfile.web
+Dockerfile.web.dockerignore
+AGENT.md
+PROJECT_*.md
+*.md
+
+# Root legacy tests folder
+/src/__tests__
+/src

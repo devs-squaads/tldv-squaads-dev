@@ -1,0 +1,25 @@
+# Keep Docker build context minimal for the worker image:
+# ignore everything by default, then allow only required inputs.
+**
+
+# Files copied explicitly by Dockerfile.worker during dependency stage
+!apps/
+!apps/worker/
+!apps/worker/package.json
+!apps/worker/package.root-worker.json
+!packages/
+!packages/shared/
+!packages/shared/package.json
+
+# Sources copied by Dockerfile.worker in prep stage
+!apps/worker/**
+!packages/shared/**
+!tsconfig.base.json
+
+# Only the worker entrypoint script is required from scripts/
+!scripts/
+!scripts/entrypoint.worker.sh
+
+# Re-exclude generated/vendor artifacts inside included trees
+apps/worker/node_modules
+packages/shared/node_modules

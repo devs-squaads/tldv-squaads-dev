@@ -1,0 +1,8 @@
+{
+  "name": "meeting-bot-worker-root",
+  "private": true,
+  "workspaces": [
+    "apps/worker",
+    "packages/shared"
+  ]
+}

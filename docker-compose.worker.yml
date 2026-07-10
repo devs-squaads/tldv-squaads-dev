@@ -1,0 +1,20 @@
+name: meeting-worker-service
+
+services:
+  meeting-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: meeting-worker-service
+    env_file:
+      - path: .env
+        required: false
+      - path: ${WORKER_ENV_FILE:-.env.production}
+        required: false
+    environment:
+      ROLE: worker
+      NODE_ENV: production
+      IS_DOCKER: "true"
+      WORKER_MAX_CONCURRENT: "1"
+    init: true
+    restart: unless-stopped

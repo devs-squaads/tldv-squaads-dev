@@ -1,0 +1,32 @@
+name: meeting-worker-dev-stack
+
+services:
+  meeting-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: meeting-worker:dev
+    container_name: meeting-worker-dev
+    restart: unless-stopped
+    init: true
+    shm_size: "2gb"
+    env_file:
+      - path: .env.dev
+        required: true
+    environment:
+      ROLE: worker
+      NODE_ENV: production
+      IS_DOCKER: "true"
+      RUN_MIGRATIONS: "false"
+    networks:
+      - nginx_network
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:' + (process.env.WORKER_INTERNAL_PORT || '4000') + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  nginx_network:
+    external: true

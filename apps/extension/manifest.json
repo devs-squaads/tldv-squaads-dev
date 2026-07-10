@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Squaads Bot Assistant",
+  "version": "0.1.0",
+  "description": "Invite the Squaads bot from Google Meet, Microsoft Teams, or Zoom Web.",
+  "icons": {
+    "16": "assets/squaads-icon.png",
+    "32": "assets/squaads-icon.png",
+    "48": "assets/squaads-icon.png",
+    "128": "assets/squaads-icon.png"
+  },
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://teams.microsoft.com/*",
+    "https://*.zoom.us/*",
+    "https://*.zoom.com/*",
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "http://0.0.0.0:3000/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://teams.microsoft.com/*",
+        "https://*.zoom.us/*",
+        "https://*.zoom.com/*"
+      ],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "assets/squaads-icon.png",
+      "32": "assets/squaads-icon.png",
+      "48": "assets/squaads-icon.png",
+      "128": "assets/squaads-icon.png"
+    }
+  }
+}

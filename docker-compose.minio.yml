@@ -1,0 +1,37 @@
+name: meeting-storage-service
+
+services:
+  minio:
+    image: minio/minio
+    container_name: meeting-storage-service
+    env_file:
+      - .env
+      - ${MINIO_ENV_FILE:-.env.production}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  mc:
+    image: minio/mc
+    container_name: meeting-storage-mc-service
+    env_file:
+      - .env
+      - ${MINIO_ENV_FILE:-.env.production}
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do
+        echo 'Waiting for MinIO...'
+        sleep 1
+      done;
+      /usr/bin/mc mb local/$${S3_BUCKET} || true;
+      exit 0;
+      "
+
+volumes:
+  minio-data:

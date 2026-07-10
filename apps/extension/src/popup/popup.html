@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Squaads Extension</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="hero card card--hero">
+        <div class="hero__eyebrow">
+          <span class="hero__dot"></span>
+          Extension Control
+        </div>
+        <div class="hero__content">
+          <div class="hero__brandmark" aria-hidden="true">
+            <svg viewBox="0 0 48 48" class="hero__brandmark-svg" role="presentation">
+              <defs>
+                <linearGradient id="brandmark-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#67e8f9" />
+                  <stop offset="55%" stop-color="#38bdf8" />
+                  <stop offset="100%" stop-color="#2563eb" />
+                </linearGradient>
+              </defs>
+              <path d="M31.8 12.4c-2.1-1.6-4.9-2.4-8.4-2.4-3.6 0-6.4.8-8.4 2.3-2.1 1.6-3.1 3.8-3.1 6.6 0 2.2.6 3.9 1.9 5.2 1.2 1.3 2.8 2.2 4.8 2.8 1.9.6 4.1 1.1 6.5 1.6 2.2.4 3.7.9 4.7 1.4.9.5 1.4 1.3 1.4 2.3 0 1.1-.5 1.9-1.6 2.5-1 .6-2.6.9-4.7.9-2 0-4-.3-6-.9-2-.6-3.8-1.4-5.6-2.5l-3 6.4c1.7 1.2 3.9 2.2 6.6 2.9 2.7.7 5.4 1.1 8.2 1.1 3.6 0 6.5-.5 8.8-1.5 2.2-1 3.9-2.3 5-4 1.1-1.7 1.6-3.5 1.6-5.5 0-2.1-.6-3.8-1.8-5.1-1.2-1.3-2.8-2.2-4.7-2.8-1.9-.6-4.1-1.1-6.5-1.6-2.2-.5-3.8-.9-4.8-1.3-1-.4-1.5-1.1-1.5-2 0-.9.5-1.6 1.4-2.2.9-.5 2.3-.8 4.1-.8 2.7 0 5.5.8 8.4 2.3l2.8-6.4Z" fill="url(#brandmark-gradient)" />
+            </svg>
+          </div>
+          <h1>Squaads Bot</h1>
+          <p class="hero__subtitle">Premium control surface for your live meeting bot.</p>
+        </div>
+      </header>
+
+      <nav class="view-toggle" aria-label="Popup views" role="tablist">
+        <button id="show-overview" class="view-toggle__button view-toggle__button--active" type="button" role="tab" aria-selected="true" aria-controls="overview-panel">Overview</button>
+        <button id="show-settings" class="view-toggle__button" type="button" role="tab" aria-selected="false" aria-controls="settings-panel">Configuration</button>
+      </nav>
+
+      <section id="settings-panel" class="card card--panel" hidden>
+        <div class="section-header">
+          <div>
+            <h2>Connection</h2>
+            <p class="section-copy">Secure runtime settings for bot activation and defaults.</p>
+          </div>
+          <span class="section-badge">Config</span>
+        </div>
+
+        <div id="connection-status-card" class="connection-status connection-status--not-connected">
+          <p id="connection-status-title" class="connection-status__title">Not connected yet</p>
+          <p id="connection-status-copy" class="connection-status__copy">Paste a temporary connection token from the Squaads dashboard to connect this extension securely.</p>
+          <p id="connection-site-copy" class="connection-status__site">Open the Squaads dashboard tab before connecting.</p>
+        </div>
+
+        <label>
+          Temporary Connection Token
+          <input id="connection-token" type="password" placeholder="Paste token from Squaads dashboard" />
+        </label>
+        <button id="connect-extension" class="btn">Connect to Current Site</button>
+
+        <label>
+          Default Bot Name
+          <input id="bot-name" type="text" placeholder="Squaads Assistant" />
+        </label>
+        <label>
+          Default Duration (min)
+          <input id="duration" type="number" min="1" max="480" />
+        </label>
+        <button id="save-settings" class="btn btn-secondary">Save Settings</button>
+      </section>
+
+      <section id="overview-panel" class="card card--panel card--meeting">
+        <div class="section-header">
+          <div>
+            <h2>Current Tab</h2>
+            <p id="meeting-meta" class="section-copy">Live sync between popup and floating widget.</p>
+          </div>
+          <span class="section-badge section-badge--live">Live</span>
+        </div>
+
+        <div class="status-stack">
+          <p id="meeting-status" class="status-primary">Checking tab...</p>
+          <p id="meeting-runtime-status" class="runtime-status"></p>
+        </div>
+
+        <button id="restore-widget" class="btn btn-ghost" hidden>Restore Floating Widget</button>
+        <div id="meeting-actions" class="actions">
+          <button id="refresh-status" class="btn btn-secondary" disabled>Refresh Status</button>
+          <button id="invite-now" class="btn" disabled>Invite Bot</button>
+        </div>
+      </section>
+
+      <p id="feedback" class="feedback"></p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

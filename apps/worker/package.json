@@ -1,0 +1,21 @@
+{
+  "name": "@meeting-bot/worker",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch run src/runner.ts",
+    "start": "bun run src/runner.ts"
+  },
+  "dependencies": {
+    "@deepgram/sdk": "^5.0.0",
+    "@google/generative-ai": "^0.24.0",
+    "@meeting-bot/shared": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "googleapis": "^171.4.0",
+    "groq-sdk": "^0.9.0",
+    "openai": "^6.27.0",
+    "puppeteer": "^24.39.0",
+    "puppeteer-core": "^24.39.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

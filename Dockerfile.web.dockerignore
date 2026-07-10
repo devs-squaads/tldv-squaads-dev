@@ -1,0 +1,26 @@
+# Keep Docker build context minimal for the web image:
+# ignore everything by default, then allow only required inputs.
+**
+
+# Files copied explicitly by Dockerfile.web during dependency stage
+!tsconfig.base.json
+!drizzle.config.ts
+
+# Workspace sources copied by Dockerfile.web in builder stage
+!apps/
+!apps/web/
+!apps/web/**
+!packages/
+!packages/shared/
+!packages/shared/**
+!drizzle/
+!drizzle/**
+
+# Only the web entrypoint script is required from scripts/
+!scripts/
+!scripts/entrypoint.web.sh
+
+# Re-exclude generated/vendor artifacts inside included trees
+apps/web/.next
+apps/web/node_modules
+packages/shared/node_modules
