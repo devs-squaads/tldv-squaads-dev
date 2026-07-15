@@ -20,7 +20,7 @@ export default function LoginPage() {
   const redirectTarget = resolveLoginRedirect(searchParams.get("callbackUrl"));
 
   useEffect(() => {
-    setMounted(true);
+    queueMicrotask(() => setMounted(true));
   }, []);
 
   useEffect(() => {

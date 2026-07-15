@@ -5,6 +5,7 @@ import { Readable } from "stream";
 
 let _s3Module: typeof import("@aws-sdk/client-s3") | null = null;
 let _presignerModule: typeof import("@aws-sdk/s3-request-presigner") | null = null;
+type S3ClientInstance = InstanceType<typeof import("@aws-sdk/client-s3").S3Client>;
 
 async function getS3Module() {
   if (!_s3Module) _s3Module = await import("@aws-sdk/client-s3");
@@ -17,11 +18,11 @@ async function getPresignerModule() {
 }
 
 export class S3StorageProvider implements IStorageProvider {
-  private client: any;
+  private client: S3ClientInstance | null = null;
   private bucket: string;
   private endpoint?: string;
   private publicEndpoint?: string;
-  private signingClient: any;
+  private signingClient: S3ClientInstance | null = null;
   private initialized = false;
 
   constructor() {
@@ -79,7 +80,7 @@ export class S3StorageProvider implements IStorageProvider {
       });
 
       console.log(`[S3StorageProvider] Sending PutObjectCommand to ${this.endpoint || "S3"}...`);
-      await this.client.send(command);
+      await this.client!.send(command);
       console.log("[S3StorageProvider] Upload successful.");
 
       const url = this.publicEndpoint
@@ -87,7 +88,7 @@ export class S3StorageProvider implements IStorageProvider {
         : `https://${this.bucket}.s3.${process.env.S3_REGION}.amazonaws.com/${destinationKey}`;
 
       return { url, key: destinationKey };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("[S3StorageProvider] Error during upload:", error);
       throw error;
     }
@@ -98,7 +99,7 @@ export class S3StorageProvider implements IStorageProvider {
     const { GetObjectCommand } = await getS3Module();
 
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
-    const response = await this.client.send(command);
+    const response = await this.client!.send(command);
 
     if (!response.Body) {
       throw new Error(`Empty response body when downloading key: ${key}`);
@@ -117,7 +118,7 @@ export class S3StorageProvider implements IStorageProvider {
       Bucket: this.bucket,
       Key: key,
     });
-    await this.client.send(command);
+    await this.client!.send(command);
   }
 
   async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
@@ -132,7 +133,7 @@ export class S3StorageProvider implements IStorageProvider {
       ResponseContentDisposition: `attachment; filename="${filename}"`,
     });
 
+    if (!this.signingClient) throw new Error("S3 signing client is not initialized");
     return getSignedUrl(this.signingClient, command, { expiresIn });
   }
 }
-

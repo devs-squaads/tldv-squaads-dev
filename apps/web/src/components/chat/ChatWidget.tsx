@@ -7,6 +7,7 @@ import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatSuggestions } from "@/components/chat/ChatSuggestion";
 import { useChatStream, getToolLabel } from "@/components/chat/useChatStream";
+import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
 
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
@@ -230,6 +231,9 @@ export function ChatWidget() {
             </button>
           </div>
         )}
+        <div className="flex justify-center pb-2">
+          <ReportBugButton />
+        </div>
       </div>
 
       {/* Floating trigger button */}

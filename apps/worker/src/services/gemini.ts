@@ -67,7 +67,7 @@ function sanitizeKeyMoments(
   if (raw.length === 0) return [];
 
   // 1. Clamp timestamps to [0, maxDuration] when we know the ceiling
-  let clamped = raw.map((m) => {
+  const clamped = raw.map((m) => {
     let t = Number.isFinite(m.timeSeconds) ? Math.max(0, Math.floor(m.timeSeconds)) : 0;
     if (maxDurationSeconds && maxDurationSeconds > 0 && t > maxDurationSeconds) {
       t = Math.floor(maxDurationSeconds);
