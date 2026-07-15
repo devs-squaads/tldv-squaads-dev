@@ -57,9 +57,11 @@ export function DashboardClient({ meetings }: { meetings: Meeting[] }) {
   const router = useRouter();
 
   useEffect(() => {
-    setSearch(searchParams.get("search") ?? "");
-    setStatusFilter(searchParams.get("filter") ?? "all");
-    setDateFilter(searchParams.get("date") ?? "");
+    queueMicrotask(() => {
+      setSearch(searchParams.get("search") ?? "");
+      setStatusFilter(searchParams.get("filter") ?? "all");
+      setDateFilter(searchParams.get("date") ?? "");
+    });
   }, [searchParams]);
 
   useEffect(() => {

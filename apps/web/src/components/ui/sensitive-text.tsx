@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
+import { scheduleNextAnimationFrame } from "./animationLoop";
 
 interface SensitiveTextProps {
   children: string;
@@ -29,6 +30,7 @@ export default function SensitiveText({
     () => new Array(children.length).fill(0)
   );
   const animFrameRef = useRef<number>(0);
+  const animateRef = useRef<(() => void) | null>(null);
   const targetScalesRef = useRef<number[]>(new Array(children.length).fill(1));
   const currentScalesRef = useRef<number[]>(new Array(children.length).fill(1));
   const targetIntensitiesRef = useRef<number[]>(new Array(children.length).fill(0));
@@ -64,9 +66,13 @@ export default function SensitiveText({
     setLetterIntensities([...nextInt]);
 
     if (needsUpdate || isHoveringRef.current) {
-      animFrameRef.current = requestAnimationFrame(animate);
+      animFrameRef.current = scheduleNextAnimationFrame(requestAnimationFrame, () => animateRef.current ?? (() => {}));
     }
   }, [easing]);
+
+  useEffect(() => {
+    animateRef.current = animate;
+  }, [animate]);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {

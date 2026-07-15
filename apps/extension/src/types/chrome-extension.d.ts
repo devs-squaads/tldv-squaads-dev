@@ -1,1 +1,1 @@
-declare const chrome: any;
+declare const chrome: typeof globalThis.chrome;

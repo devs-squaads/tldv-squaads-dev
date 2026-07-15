@@ -2,7 +2,6 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-  ChatTrustBoundaryError,
   sanitizeMessageList,
   buildTrustedConversation,
 } from "../../../web/src/modules/chat/http/trustBoundary";
@@ -89,14 +88,14 @@ describe("POST /api/chat route logic", () => {
   describe("request ID header handling", () => {
     it("extracts valid X-Request-Id from headers", () => {
       const headers = new Headers({ "x-request-id": "req.test-123" });
-      const context = createChatRequestContext({ headers } as any, "chat");
+      const context = createChatRequestContext({ headers }, "chat");
       expect(context.requestId).toBe("req.test-123");
       expect(context.responseHeaders.get("X-Request-Id")).toBe("req.test-123");
     });
 
     it("generates UUID for invalid header", () => {
       const headers = new Headers({ "x-request-id": "invalid!" });
-      const context = createChatRequestContext({ headers } as any, "chat");
+      const context = createChatRequestContext({ headers }, "chat");
       expect(context.requestId).not.toBe("invalid!");
       expect(context.requestId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
@@ -105,7 +104,7 @@ describe("POST /api/chat route logic", () => {
 
     it("generates UUID when header is missing", () => {
       const headers = new Headers();
-      const context = createChatRequestContext({ headers } as any, "chat");
+      const context = createChatRequestContext({ headers }, "chat");
       expect(context.requestId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
       );

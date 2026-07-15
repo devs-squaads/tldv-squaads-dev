@@ -19,6 +19,7 @@ import { clearInactiveSharesAction, createShareAction, renewShareAccessAction, r
 import { useRouter } from "next/navigation";
 import { ChapterVideoPlayer, type Chapter } from "./ChapterVideoPlayer";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
+import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
 
 interface Meeting {
   id: string;
@@ -653,6 +654,9 @@ export function MeetingDetailsView({
               {meeting.errorMessage || "Ocurrio un error inesperado."}
             </CardDescription>
           </CardHeader>
+          <CardContent>
+            <ReportBugButton meetingId={meeting.id} />
+          </CardContent>
         </Card>
       )}
 
@@ -907,7 +911,7 @@ export function MeetingDetailsView({
                 )}
               </div>
             </CardHeader>
-            <CardContent>
+          <CardContent>
               {meeting.rawTranscription ? (
                 <div>
                   <div className={`relative text-sm text-[var(--muted-foreground)] leading-relaxed whitespace-pre-line ${!showFullTranscription ? "max-h-[300px] overflow-hidden" : "max-h-[600px] overflow-y-auto"}`}>

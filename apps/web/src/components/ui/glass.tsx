@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback } from "react";
+import { scheduleNextAnimationFrame } from "./animationLoop";
 
 interface GlassProps {
   children?: React.ReactNode;
@@ -30,6 +31,7 @@ export function Glass({
   const targetPos = useRef({ x: -200, y: -200 });
   const currentPos = useRef({ x: -200, y: -200 });
   const animRef = useRef<number>(0);
+  const animateRef = useRef<(() => void) | null>(null);
   const isActive = useRef(false);
 
   const animate = useCallback(() => {
@@ -44,9 +46,13 @@ export function Glass({
 
     // Keep animating as long as there's movement
     if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05 || isActive.current) {
-      animRef.current = requestAnimationFrame(animate);
+      animRef.current = scheduleNextAnimationFrame(requestAnimationFrame, () => animateRef.current ?? (() => {}));
     }
   }, []);
+
+  useEffect(() => {
+    animateRef.current = animate;
+  }, [animate]);
 
   useEffect(() => {
     if (!followMouse) return;

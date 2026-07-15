@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
+import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/Card";
@@ -337,11 +338,14 @@ export default function SettingsView({ initialSettings }: { initialSettings: Rec
           {session?.user && (
             <div className="flex items-center gap-3 p-3 rounded-lg" style={{ background: "rgba(0, 242, 255, 0.04)", border: "1px solid rgba(0, 242, 255, 0.1)" }}>
               {session.user.image && (
-                <img
+                <Image
                   src={session.user.image}
                   alt=""
+                  width={40}
+                  height={40}
                   className="w-10 h-10 rounded-full border border-[#00F2FF]/30"
                   referrerPolicy="no-referrer"
+                  loading="eager"
                 />
               )}
               <div className="flex-1 min-w-0">
@@ -389,8 +393,8 @@ export default function SettingsView({ initialSettings }: { initialSettings: Rec
                 Todavía no conectaste tu Calendario de Google.
               </div>
               <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed px-1">
-                Google va a mostrar un aviso de "app no verificada" — es esperado, no es un error.
-                Hacé clic en "Avanzado" y después en "Ir a Squaads Bot (no seguro)" para continuar.
+                Google va a mostrar un aviso de &quot;app no verificada&quot; — es esperado, no es un error.
+                Hacé clic en &quot;Avanzado&quot; y después en &quot;Ir a Squaads Bot (no seguro)&quot; para continuar.
               </p>
               <a href="/api/settings/calendar-connect">
                 <Button className="w-full gap-2" size="sm">

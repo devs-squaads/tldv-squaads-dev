@@ -19,6 +19,11 @@ export const CHAT_OBSERVABILITY_EVENTS = {
     requestReceived: "support.request.received",
     payloadInvalid: "support.payload.invalid",
   },
+  bugReport: {
+    requestReceived: "bug_report.request.received",
+    payloadInvalid: "bug_report.payload.invalid",
+    submitted: "bug_report.submitted",
+  },
 } as const;
 
 export type ChatObservabilityRoute = keyof typeof CHAT_OBSERVABILITY_EVENTS;

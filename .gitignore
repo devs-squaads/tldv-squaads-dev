@@ -92,6 +92,9 @@ apps/extension/dist/
 # Filtra rutas absolutas locales (C:\Users\...) — no debe versionarse.
 .atl/
 
+# Gentle Codegraph: índice de skills generado por máquina.
+.codegraph/
+
 # Puente de skills para Claude (symlinks regenerables → .agents/skills/).
 # La fuente única versionada es .agents/skills/. Este puente es por-máquina.
 .claude/skills/

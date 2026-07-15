@@ -178,6 +178,7 @@ bun run build:web
 | `DATABASE_URL`                                                | Conexion PostgreSQL/Supabase compartida por `web` y `worker`.                                                                                  |
 | `API_ROUTE_SECRET`                                            | Secreto Bearer para proteger rutas API de encolado de reuniones.                                                                               |
 | `WORKER_INTERNAL_BASE_URL`                                    | URL base servidor-a-servidor usada por `web` para pedir al `worker` operaciones internas (`reprocess`, `retry`, `refine-summary`, `auto-join/poll`). |
+| `DISCORD_BUGREPORT_WEBHOOK_URL`                               | Optional web-only Discord webhook for redacted bug reports. Use `REPLACE_WITH_DISCORD_WEBHOOK_URL`; when unset, reports use the safe console provider. |
 | `WORKER_INTERNAL_PORT`                                        | Puerto HTTP interno donde el `worker` expone su API privada servidor-a-servidor (por defecto `4000`).                                        |
 | `SHARE_APP_BASE_URL`                                          | URL base pública usada para construir enlaces de compartición (`/share/:token`).                                                               |
 | `SHARE_TTL_OPTIONS_MINUTES`                                   | Lista CSV de TTL permitidos (en minutos) para los selectores de creación/renovación de enlaces (ej. `60,1440,10080`).                          |
