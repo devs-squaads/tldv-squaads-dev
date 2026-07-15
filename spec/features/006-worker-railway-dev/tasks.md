@@ -23,12 +23,15 @@ lógica sí lleva su micro-test (RED → GREEN → REFACTOR)._
       (variante JSON), `WORKER_INTERNAL_PORT`, `WORKER_MAX_CONCURRENT=1`, conexión a la DB de Supabase
       (cola de dev) y demás env del worker.
 - [ ] Desplegar con `railway up --ci`.
-- [ ] Verificar `railway deployment list --json` hasta estado `SUCCESS`. Ante fallo, revisar logs y
-      corregir configuración (no lógica de app).
-- [ ] **Cutover:** parar el worker-dev del VPS para que solo Railway pollee la cola de dev.
-- [ ] Validar `GET /health` → `200` desde el dominio público que asigna Railway.
-- [ ] Correr una reunión de prueba corta end-to-end y confirmar estado `completed` (MP4 en el S3 del VPS
-      + transcripción + resumen).
+- [x] Verificar `railway deployment list --json` hasta estado `SUCCESS`. Deploy `497ec914-…` confirmado
+      `SUCCESS`; runtime logs muestran arranque limpio (PulseAudio, API interna en :4000, polling cada 5s).
+- [ ] **Cutover:** no aplica tal cual estaba planeado — el usuario no tiene acceso al VPS para parar el
+      worker-dev viejo. Se desambigua por destino de subida: si la grabación de prueba aparece en el
+      bucket de Railway (`tldv-meetings-dev-wlwoxrq`), la procesó este worker.
+- [x] Validar `GET /health` → `200` desde el dominio público que asigna Railway. Dominio generado
+      `https://worker-dev-remote.up.railway.app` (puerto 4000) → `200 {"status":"ok","role":"worker",...}`.
+- [ ] Correr una reunión de prueba corta end-to-end y confirmar estado `completed` (MP4 en el bucket de
+      Railway + transcripción + resumen).
 - [ ] Revisar los logs: sin crashes de `/dev/shm` de Chromium.
 - [ ] **Reactivo (solo si crashea shm):** agregar `--disable-dev-shm-usage` a los args de Puppeteer en el
       launcher del worker (`apps/worker`), con su micro-test (RED → GREEN → REFACTOR); confirmar que el
