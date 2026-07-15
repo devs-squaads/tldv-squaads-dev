@@ -3,6 +3,10 @@
     "supabase-tldv": {
       "type": "http",
       "url": "https://mcp.supabase.com/mcp?project_ref=jgycakobknhfsdsufcxd&read_only=true"
+    },
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=ljerzkktmzrpiwsahkvp"
     }
   }
 }
