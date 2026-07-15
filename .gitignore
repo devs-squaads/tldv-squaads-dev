@@ -47,6 +47,8 @@ yarn-error.log*
 # Environment overrides with real secrets (never commit)
 .env.dev
 .env.prod
+.env.dev.railway
+.env*.railway
 
 # Service Account keys mounted into the worker container (never commit)
 /resources/*
