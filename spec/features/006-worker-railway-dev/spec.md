@@ -11,9 +11,10 @@ worker-dev deja de vivir en el VPS y pasa a correr en un servicio de Railway con
 público, alcanzando el mismo trabajo de siempre: reclama reuniones de la cola de dev, graba con
 Puppeteer + FFmpeg, transcribe y resume.
 
-El resto del sistema no cambia: la base de datos sigue en **Supabase** (misma cola de dev), el
-almacenamiento de video sigue en el **MinIO del VPS** (se reutiliza su endpoint público, sin tocar el
-VPS) y la web es un tema aparte (Vercel). El worker de **producción** sigue intacto en el VPS.
+La base de datos sigue en **Supabase** (misma cola de dev) y la web es un tema aparte (Vercel). El
+**almacenamiento de video deja de usar el MinIO del VPS** — su API S3 no es alcanzable desde fuera del
+VPS y no hay acceso para exponerla — y pasa a un **bucket S3-compatible de Railway**. El worker de
+**producción** sigue intacto en el VPS.
 
 Es una ronda de **infraestructura/configuración**, no de lógica de negocio: el objetivo es probar que
 `Dockerfile.worker` buildea y corre en Railway vía `railway up` manual desde local, y que una grabación
@@ -39,9 +40,10 @@ persistente). Esto convierte la migración en un ejercicio de configuración, no
 _Todos verificables por integración/manual (esta feature cae en la excepción de validación
 integración/manual de `AGENTS.md`: captura multimedia del worker con Puppeteer + FFmpeg)._
 
-- [ ] **Checkpoint S3:** un `PutObject` de prueba contra el endpoint público de MinIO
-      (`S3_PUBLIC_ENDPOINT`) responde OK. Si falla, se frena la ronda: habría que exponer la API S3 de
-      escritura, lo que contradice "el VPS/S3 no se toca".
+- [x] **Checkpoint S3 (hecho):** un `PutObject` contra el bucket de Railway responde OK — validado con
+      round-trip PutObject/GetObject/DeleteObject usando el `S3StorageProvider` actual, sin cambios de
+      código. El endpoint público del MinIO del VPS quedó descartado: sirve la consola, no la API S3, y no
+      hay acceso al VPS para exponerla.
 - [ ] El servicio worker en Railway (proyecto `TLDV-DEV`, environment `dev-remote`) alcanza estado de
       deploy `SUCCESS` construyendo desde `Dockerfile.worker`.
 - [ ] `GET /health` responde `200` desde el dominio público que asigna Railway.
@@ -61,5 +63,6 @@ integración/manual de `AGENTS.md`: captura multimedia del worker con Puppeteer 
   usa `railway up` manual desde local.
 - **Borrar `deploy.sh` y los workflows de despliegue** — no se eliminan; en la fase de documentación
   posterior solo se marcan como "inactivos para el worker de este repo -dev".
-- **Tocar el VPS o el MinIO** — se reutiliza el endpoint público de S3 tal cual está.
+- **Tocar el VPS** — no se accede al VPS en absoluto; el almacenamiento se resuelve con un bucket de
+  Railway, no con el MinIO del VPS. Las grabaciones viejas de dev que quedaron en el MinIO se abandonan.
 - **Instalar el MCP de Railway para Claude Code.**

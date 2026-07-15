@@ -8,17 +8,20 @@ infra se validan por **integración/manual**, NO se fuerza el orden RED → GREE
 La única excepción es el eventual fix de `--disable-dev-shm-usage`: si hay que aplicarlo, esa pieza de
 lógica sí lleva su micro-test (RED → GREEN → REFACTOR)._
 
-- [ ] **Checkpoint S3 (bloqueante):** ejecutar un `PutObject` de prueba contra `S3_PUBLIC_ENDPOINT`
-      (`https://minio-tldv-dev.server.squaads.com/`) con las credenciales S3. Registrar OK/KO. Si KO,
-      **frenar la ronda** (contradiría "el VPS/S3 no se toca").
+- [x] **Storage:** crear el bucket S3-compatible de Railway (`tldv-meetings-dev` → `tldv-meetings-dev-wlwoxrq`,
+      endpoint `https://t3.storageapi.dev`) en `TLDV-DEV`/`dev-remote`.
+- [x] **Checkpoint S3:** validado round-trip (PutObject/GetObject/DeleteObject) contra el bucket con el
+      `S3StorageProvider` actual, sin cambios de código. (El MinIO público del VPS quedó descartado: sirve
+      la consola, no la API S3, y no hay acceso al VPS.)
 - [ ] Crear `.railwayignore` en la raíz del repo excluyendo lo que `Dockerfile.worker` no necesita
       (`apps/web`, `apps/extension`, artefactos, `.env*`).
 - [ ] `railway add --service worker` en el proyecto `TLDV-DEV`, environment `dev-remote`.
 - [ ] Configurar el builder del servicio como **DOCKERFILE** apuntando a `Dockerfile.worker`.
-- [ ] Cargar las variables de entorno en el store de Railway: `S3_ENDPOINT` (= valor de
-      `S3_PUBLIC_ENDPOINT`), `S3_PUBLIC_ENDPOINT`, credenciales S3 (secretos — solo por nombre),
-      `GOOGLE_SERVICE_ACCOUNT_JSON` (variante JSON), `WORKER_INTERNAL_PORT`, `WORKER_MAX_CONCURRENT=1`,
-      conexión a la DB de Supabase (cola de dev) y demás env del worker.
+- [ ] Cargar las variables de entorno en el store de Railway: `S3_ENDPOINT` y `S3_PUBLIC_ENDPOINT` =
+      `https://t3.storageapi.dev`, `S3_BUCKET` = `tldv-meetings-dev-wlwoxrq`, credenciales del bucket
+      (`S3_ACCESS_KEY`/`S3_SECRET_KEY`, secretos — solo por nombre), `GOOGLE_SERVICE_ACCOUNT_JSON`
+      (variante JSON), `WORKER_INTERNAL_PORT`, `WORKER_MAX_CONCURRENT=1`, conexión a la DB de Supabase
+      (cola de dev) y demás env del worker.
 - [ ] Desplegar con `railway up --ci`.
 - [ ] Verificar `railway deployment list --json` hasta estado `SUCCESS`. Ante fallo, revisar logs y
       corregir configuración (no lógica de app).

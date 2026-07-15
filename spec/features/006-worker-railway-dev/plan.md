@@ -22,20 +22,23 @@ escribe el MP4 en `os.tmpdir()` borrándolo tras subir a S3.
 
 _Pasos técnicos concretos, en orden. Indica los archivos/módulos que se tocan._
 
-1. **Checkpoint S3 (bloqueante)** — validar un `PutObject` de prueba contra el endpoint público de
-   MinIO (`S3_PUBLIC_ENDPOINT` = `https://minio-tldv-dev.server.squaads.com/`) con las credenciales S3.
-   `S3StorageProvider` usa `S3_ENDPOINT` para el `PutObject` de subida
-   (`packages/shared/src/integrations/storage/providers/S3StorageProvider.ts:40`); en Railway se seteará
-   `S3_ENDPOINT` = valor de `S3_PUBLIC_ENDPOINT`. Si escribir contra el público falla, se frena la ronda.
+1. **Storage en Railway Bucket (hecho)** — el endpoint público del MinIO del VPS resultó ser la consola,
+   no la API S3, y no hay acceso al VPS para exponerla. Se creó un bucket S3-compatible de Railway
+   (nombre `tldv-meetings-dev` → real `tldv-meetings-dev-wlwoxrq`, endpoint `https://t3.storageapi.dev`,
+   región `auto`) en `TLDV-DEV`/`dev-remote`, y se validó con un checkpoint end-to-end (PutObject +
+   GetObject + DeleteObject) usando el `S3StorageProvider` actual
+   (`packages/shared/src/integrations/storage/providers/S3StorageProvider.ts:40`) sin cambios de código.
 2. **`.railwayignore`** (nuevo, en la raíz del repo) — excluir del contexto de build lo que no necesita
    `Dockerfile.worker` (p.ej. `apps/web`, `apps/extension`, artefactos, `.env*`), para acelerar el
    upload de `railway up` y evitar filtrar secretos locales.
 3. **Crear el servicio** — `railway add --service worker` en el proyecto `TLDV-DEV`, environment
    `dev-remote`; configurar builder **DOCKERFILE** apuntando a `Dockerfile.worker`.
 4. **Cargar las variables de entorno** en el store de Railway (SSOT de env para este servicio). Incluye,
-   entre otras: `S3_ENDPOINT` (= público), `S3_PUBLIC_ENDPOINT`, credenciales S3 (secretos — solo por
-   nombre, nunca en artefactos), `GOOGLE_SERVICE_ACCOUNT_JSON` (variante JSON, no bind-mount de archivo),
-   `WORKER_INTERNAL_PORT`, `WORKER_MAX_CONCURRENT=1`, y la conexión a la DB de Supabase (cola de dev).
+   entre otras: `S3_ENDPOINT` y `S3_PUBLIC_ENDPOINT` = `https://t3.storageapi.dev`, `S3_BUCKET` =
+   `tldv-meetings-dev-wlwoxrq`, credenciales del bucket de Railway (`S3_ACCESS_KEY`/`S3_SECRET_KEY`,
+   secretos — solo por nombre, nunca en artefactos), `GOOGLE_SERVICE_ACCOUNT_JSON` (variante JSON, no
+   bind-mount de archivo), `WORKER_INTERNAL_PORT`, `WORKER_MAX_CONCURRENT=1`, y la conexión a la DB de
+   Supabase (cola de dev).
 5. **Desplegar** — `railway up --ci` y verificar con `railway deployment list --json` hasta estado
    `SUCCESS`. Ante fallo de build/deploy, revisar logs y corregir config (no lógica de app).
 6. **Cutover** — parar el worker-dev del VPS (que deje de pollear la cola de dev). A partir de acá solo
@@ -75,12 +78,12 @@ _Elecciones de diseño relevantes y su justificación. Alternativas descartadas 
   lógica de negocio unit-testeable; `AGENTS.md` exime la captura multimedia (Puppeteer + FFmpeg) del TDD,
   validándola por integración/manual. Excepción: si se toca lógica real (el fix de
   `--disable-dev-shm-usage`), esa pieza sí lleva su micro-test red → green → refactor.
-- **S3 = se reutiliza el endpoint público existente; el VPS no se toca** — hoy `S3_ENDPOINT` es el
-  hostname interno del Docker del VPS (`http://…:9000`, inalcanzable desde Railway) y `S3_PUBLIC_ENDPOINT`
-  es público HTTPS (ya usado para firmar descargas). En Railway se setea `S3_ENDPOINT` = valor de
-  `S3_PUBLIC_ENDPOINT` (ambos al público), porque `S3StorageProvider` usa `S3_ENDPOINT` para el
-  `PutObject` de subida. Se descarta abrir/tocar el VPS. Las credenciales S3 son secretos: viven solo en
-  el store de Railway, nunca en artefactos.
+- **Storage = bucket S3-compatible de Railway (pivote); el VPS no se toca** — el checkpoint reveló que el
+  endpoint público del MinIO del VPS sirve la consola, no la API S3, y sin acceso al VPS no se puede
+  exponer. Se pivotó a un bucket de Railway (mismo proveedor/factura que el worker, sin cuenta nueva).
+  Cero código: `S3StorageProvider` es agnóstico de proveedor, solo cambian las env vars. Se descartaron
+  Cloudflare R2 (más barato por egress, pero cuenta nueva — queda como swap futuro para producción),
+  Supabase Storage y AWS S3. Las credenciales del bucket son secretos: solo en el store de Railway.
 - **`deploy.sh` y workflows no se borran en esta ronda** — este cambio toca conceptualmente el contrato
   de la Fase 9 (deploy automatizado del worker) de `spec/constitution/roadmap.md` y las reglas de
   `spec/constitution/tech-stack.md` (no tocar el contrato de despliegue para lógica de app; avisar
@@ -95,9 +98,10 @@ _Qué puede salir mal o requerir cuidado, y cómo se mitiga._
   (`docker-compose.worker.development.yml`) para Chromium + Xvfb + FFmpeg. Railway no expone un flag
   equivalente a `--shm-size`. **Mitigación reactiva:** si Chromium crashea por `/dev/shm`, agregar
   `--disable-dev-shm-usage` a los args de Puppeteer (una línea, con micro-test).
-- **El endpoint S3 público podría no permitir escritura** — hoy se usa para firmar/servir descargas; que
-  acepte `PutObject` de subida no está garantizado. **Mitigación:** checkpoint S3 temprano y bloqueante
-  (paso 1); si falla, se frena antes de invertir en el resto.
+- **Costo de egress en producción** — el bucket de Railway factura el egress (descargas). En dev el
+  volumen es chico, pero para producción conviene evaluar Cloudflare R2 (egress gratis); el cambio es solo
+  de env vars porque el provider es agnóstico. Las grabaciones viejas de dev que quedaron en el MinIO del
+  VPS se abandonan (las nuevas van al bucket de Railway) — aceptable en dev.
 - **IP de egress de Railway** — Google Meet podría tratar de forma distinta al bot según la IP saliente
   al unirse a la reunión. **Mitigación:** se descubre en la reunión de prueba end-to-end; si hay
   bloqueo, se evalúa en una ronda aparte (no se resuelve especulativamente ahora).
