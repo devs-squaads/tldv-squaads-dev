@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import { describe, expect, it, mock, spyOn, beforeEach, afterEach } from "bun:test";
-import { AuthorizedAccountRepository } from "../../../../packages/shared/src/repositories/AuthorizedAccountRepository";
+const AuthorizedAccountRepository = { findAll: mock(() => Promise.resolve([] as never[])), findByEmail: mock(() => Promise.resolve(null as never)), remove: mock(() => Promise.resolve()), setActive: mock(() => Promise.resolve()), setRole: mock(() => Promise.resolve()) };
 
 const bunMock = mock as typeof mock & {
   module: (specifier: string, factory: () => unknown) => void;
@@ -11,17 +11,12 @@ const mockGetServerSession = mock(() => Promise.resolve(null as unknown));
 bunMock.module("next-auth", () => ({
   getServerSession: mockGetServerSession,
 }));
-bunMock.module("@/auth", () => ({
-  authOptions: {},
-}));
 
-// AuthorizedAccountRepository is spied on its real, unmocked class (see
-// apps/__tests__/helpers/dbSchemaMock.ts) instead of faked via mock.module,
-// so this file never competes with AuthorizedAccountRepository.test.ts for
-// the same resolved module path.
-const { PATCH, DELETE } = await import(
-  "../../../web/src/app/api/admin/authorized-accounts/[email]/route"
+// Inject local doubles without loading the production repository.
+const { createAuthorizedAccountEmailHandlers } = await import(
+  "../../../web/src/auth"
 );
+const { PATCH, DELETE } = await createAuthorizedAccountEmailHandlers({ getServerSession: mockGetServerSession, AuthorizedAccountRepository });
 
 type AccountRow = { email: string; role: "admin" | "member"; isActive: boolean };
 

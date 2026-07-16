@@ -56,18 +56,6 @@ describe("autoJoinPollAndEnqueue", () => {
       }),
     }));
 
-    moduleMock.module("@meeting-bot/shared/meetingProvider", () => ({
-      isSupportedMeetingUrl: () => true,
-      normalizeMeetingUrl: (meetingUrl: string) => meetingUrl,
-      getMeetingProviderFromUrl: (meetingUrl: string) => {
-        const normalized = meetingUrl.toLowerCase();
-        if (normalized.includes("teams.microsoft.com")) return "microsoft-teams";
-        if (normalized.includes("zoom.us") || normalized.includes(".zoom.com")) return "zoom";
-        if (normalized.includes("meet.google.com")) return "google-meet";
-        return "unknown";
-      },
-    }));
-
     moduleMock.module("@meeting-bot/shared/repositories/CalendarAccountRepository", () => ({
       CalendarAccountRepository: {
         getCalendarEnabledUsers: async () => [{ id: "user-1" }],
