@@ -276,6 +276,13 @@ bun run build:web
 * La configuración de build vive versionada en `apps/web/vercel.json` (Root Directory del proyecto Vercel = `apps/web`; la instalación corre desde la raíz del workspace de Bun).
 * El `web` solo encola reuniones y consulta estado; no ejecuta FFmpeg/Puppeteer.
 
+> **Este repo (`-dev`):** el worker de development corre en **Railway** y el web en **Vercel** — mapa
+> operativo completo, variables e instrucciones de deploy en [`docs/deployment.md`](docs/deployment.md)
+> (decisión en [`docs/adr/0001-worker-railway-dev.md`](docs/adr/0001-worker-railway-dev.md)). Los
+> workflows `deploy-{development,production}.yml` y `deploy.sh` heredados del VPS están **inactivos para
+> este repo** (fallan por secrets ausentes); se retiran en la ronda de CI/CD (`chore/railway-cicd`). Lo
+> que sigue abajo describe el despliegue clásico en VPS, vigente para el repo/worker de producción.
+
 ### `worker` en servidor privado Docker
 * Desplegar el mismo repo con `ROLE=worker` y stack multimedia habilitado.
 * Variables minimas: `DATABASE_URL`, `API_ROUTE_SECRET`, `WORKER_INTERNAL_PORT`, `IS_DOCKER=true`, `PUPPETEER_EXECUTABLE_PATH`, `S3_*`, `GROQ_API_KEY` y/o `GEMINI_API_KEY`.
