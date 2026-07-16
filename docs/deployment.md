@@ -98,6 +98,8 @@ comprobar SHA, estado `SUCCESS`, logs, métricas y `/health`. No restaurar autom
 
 ## Pendientes vivos
 
+- [ ] Gates de activación del CD del worker en Railway (branch protection en `main`, re-verificación de
+  la config de Railway, luego habilitar Wait for CI + autodeploy) — ver "Activación segura" arriba.
 - [ ] Switch de **Production Branch** a `main` en Vercel (dashboard → Settings → Git) + redeploy.
 - [ ] Redirect URIs de Google OAuth para el dominio de Vercel (login bloqueado hasta entonces).
 - [ ] Feature 007 (sincronización de estados de la extensión) — abierta, pendiente
