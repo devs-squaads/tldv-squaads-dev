@@ -1,0 +1,27 @@
+name: Guard main PR source
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  check-source-branch:
+    name: Only dev (same repo) may open PRs into main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify head branch is this repo's dev
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "PRs into main must come from this repository, not a fork ($HEAD_REPO)."
+            exit 1
+          fi
+          if [ "$HEAD_REF" != "dev" ]; then
+            echo "PRs into main are only accepted from 'dev' (got '$HEAD_REF')."
+            exit 1
+          fi
+          echo "OK: PR source is $BASE_REPO:dev."

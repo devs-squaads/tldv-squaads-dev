@@ -1,0 +1,2 @@
+# Solo devs-squaads puede aprobar PRs hacia `main` (require_code_owner_reviews en branch protection).
+* @devs-squaads
