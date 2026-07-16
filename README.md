@@ -271,7 +271,9 @@ bun run build:web
 ## Despliegue dual recomendado (Produccion)
 ### `web` en Vercel
 * Desplegar la app Next con `ROLE=web`.
-* Configurar `DATABASE_URL`, `API_ROUTE_SECRET`, `WORKER_INTERNAL_BASE_URL`, `NEXTAUTH_SECRET`, `SUPER_ADMIN_EMAILS`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y variables de lectura necesarias.
+* Configurar `DATABASE_URL`, `API_ROUTE_SECRET`, `WORKER_INTERNAL_BASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `NEXT_PUBLIC_APP_URL`, `SUPER_ADMIN_EMAILS`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y variables de lectura necesarias.
+* Configurar también el bloque de storage (`STORAGE_PROVIDER=s3` + `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`): el `web` firma las URLs de reproducción/descarga de grabaciones con su propio entorno — sin estas variables el video no se puede ver desde la web.
+* La configuración de build vive versionada en `apps/web/vercel.json` (Root Directory del proyecto Vercel = `apps/web`; la instalación corre desde la raíz del workspace de Bun).
 * El `web` solo encola reuniones y consulta estado; no ejecuta FFmpeg/Puppeteer.
 
 ### `worker` en servidor privado Docker
