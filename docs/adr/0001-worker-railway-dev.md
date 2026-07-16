@@ -3,6 +3,10 @@
 **Estado:** aceptada — implementada (16/07/2026)
 **Feature:** [`spec/features/006-worker-railway-dev/`](../../spec/features/006-worker-railway-dev/spec.md)
 
+> **Actualización operativa (16/07/2026):** la decisión histórica de comenzar con deploy manual queda
+> reemplazada por CD main-only de Railway, condicionado por `CI / validate`. También se retiraron los
+> workflows y el script VPS. La arquitectura y el cierre de Feature 006 no cambian.
+
 ## Contexto
 
 El worker-dev vivía en el VPS de Squaads (Docker Compose + `deploy.sh` por SSH + GitHub Actions en push a
