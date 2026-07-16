@@ -43,6 +43,10 @@ _Lo próximo a abordar. Una sola feature "en curso" a la vez._
 10. **001 · Rollout interno de la extensión** — cerrar los pendientes vivos de Fase 8: cargar el ZIP interno
     real en entornos compartidos, validar el flujo end-to-end fuera de local y sustituir hosts locales por
     dominio real. → [`features/001-extension-rollout/`](../features/001-extension-rollout/spec.md)
+11. **007 · Sincronización de estados de la extensión** — **pendiente (abierta, sin iniciar)**. Estados con
+    latencia alta, popup desincronizado del widget y re-render con parpadeo (hallazgos del test manual del
+    16/07/2026; causa raíz investigada y documentada en la spec). En espera: prioridad actual es el deploy
+    de la web en Vercel. → [`features/007-extension-status-sync/`](../features/007-extension-status-sync/spec.md)
 
 ## Seguridad — pendientes conocidos ⚠️
 
@@ -64,7 +68,8 @@ _Sin comprometer ni ordenar del todo. Respetan la constitución._
 - **Extensión multi-plataforma** — soporte de Meet/Teams/Zoom Web con adapters. PRD en
   `../../docs/extension.md`.
 - **Dashboard con filtros, métricas y paginación** (heredado del tracking de Fase 9).
-- **SSE/WebSockets para estado en tiempo real** (heredado del tracking de Fase 9).
+- **SSE/WebSockets para estado en tiempo real** (heredado del tracking de Fase 9; evolución natural de
+  [`007-extension-status-sync`](../features/007-extension-status-sync/spec.md)).
 - **Búsqueda semántica sobre transcripciones** (heredado del tracking de Fase 9).
 - **Métricas/observabilidad avanzada del worker** (heredado del tracking de Fase 9).
 

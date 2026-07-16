@@ -9,7 +9,7 @@
 | Componente | Plataforma | Identificador | Deploy |
 |---|---|---|---|
 | Web (Next.js) | Vercel | `devssquaads-projects/tldv-squaads-dev` → https://tldv-squaads-dev.vercel.app | Automático por git (integración GitHub) |
-| Worker (Puppeteer + FFmpeg) | Railway | proyecto `TLDV-DEV` / env `dev-remote` / servicio `worker` → https://worker-dev-remote.up.railway.app | Manual: `railway up --detach --service worker --environment dev-remote` |
+| Worker (Puppeteer + FFmpeg) | Railway | proyecto `TLDV-DEV` / env `dev-remote` / servicio `worker` → https://worker-dev-remote.up.railway.app | CD desde `main`, bloqueado hasta completar las gates de activación |
 | Base de datos | Supabase (dedicada dev) | project ref `ljerzkktmzrpiwsahkvp` (pooler `aws-0-eu-west-1`, puerto 5432) | Gestionada |
 | Video (S3) | Railway Bucket | `tldv-meetings-dev-wlwoxrq` @ `https://t3.storageapi.dev` | Gestionado |
 
@@ -18,11 +18,11 @@
 
 ## Estrategia de ramas
 
-- **`dev`** — desarrollo. En Vercel genera **Previews** (una URL efímera por push) una vez hecho el
-  switch de Production Branch. Todo cambio entra por rama + PR hacia `dev`.
+- **`dev`** — integración sin autoridad de release del worker. CI valida pushes y PRs; Railway nunca
+  despliega esta rama. En Vercel puede generar **Previews**.
 - **`main`** — **prod-dev** (simulación de producción). Debe ser la **Production Branch** del proyecto
-  Vercel: push/merge a `main` → deploy de Producción en `tldv-squaads-dev.vercel.app`. Se actualiza
-  promoviendo `dev` por PR (ej.: PR #6).
+  Vercel: push/merge a `main` → deploy de Producción en `tldv-squaads-dev.vercel.app`. Es la rama por
+  defecto del repositorio y la única que puede originar un release del worker en Railway.
 - **Repo heredero** — la aplicación se heredará en otro repositorio antes de producción real. Las
   configs de build viajan versionadas (`apps/web/vercel.json`, `railway.json`), así que el repo nuevo
   solo necesita sus proyectos Vercel/Railway y sus propias variables.
@@ -61,20 +61,46 @@
   proveedor IA (vacíos = autodetección), `OPENAI_API_KEY`/`DEEPGRAM_*`, bloque auto-join/Google (solo si
   `AUTO_JOIN_ENABLED=true`; en Railway la credencial va como `GOOGLE_SERVICE_ACCOUNT_JSON`, no `_FILE`).
 - Healthcheck: `GET /health` en el dominio público → `200`.
+- Puerto: el listener resuelve primero el `PORT` válido inyectado por Railway, después un
+  `WORKER_INTERNAL_PORT` válido y, si ninguno es un entero decimal entre `1` y `65535`, usa `4000`. `railway.json` fija
+  `/health`, 60 segundos de timeout y reinicio `ON_FAILURE` con 10 reintentos.
 
-## CI/CD — estado real
+## CI/CD
 
 - **Web:** automático. Push a la Production Branch → Producción; push a otras ramas → Preview.
-- **Worker:** manual (`railway up`). El CI/CD de Railway es trabajo pendiente en la rama
-  `chore/railway-cicd`.
-- **Workflows heredados del VPS** (`.github/workflows/deploy-{development,production}.yml` + `deploy.sh`):
-  **inactivos para este repo** — fallan en ~12s en cada push a `dev`/`main` por secrets SSH ausentes.
-  Ruido conocido; se eliminan/reemplazan en la ronda de CI/CD.
+- **Validación del repositorio:** `.github/workflows/ci.yml` publica el check estable `CI / validate`
+  para pushes y PRs de `dev` y `main`. Ejecuta instalación congelada, tests, lint, typecheck y build de
+  `Dockerfile.worker` desde la raíz. No despliega ni usa secretos.
+- **Worker:** Railway es la única autoridad de CD. Solo un push elegible a `main`, para el mismo SHA con
+  `CI / validate` verde, puede desplegar. `dev` nunca despliega.
+
+### Watch scope del worker
+
+Railway debe observar `apps/worker/**`, `packages/shared/**`, `scripts/entrypoint.worker.sh`,
+`Dockerfile.worker`, `railway.json`, `.railwayignore`, `package.json`, `bun.lock` y
+`tsconfig.base.json`. Un cambio fuera de ese conjunto puede omitir el release; uno dentro no puede
+quedar fuera silenciosamente.
+
+### Activación segura
+
+1. Mantener autodeploy desactivado hasta que `main` exija PR y `CI / validate`, y bloquee push directo,
+   force-push y borrado.
+2. Leer de nuevo en Railway el repo fuente, rama `main`, root `/`, config `/railway.json`, watch scope,
+   Dockerfile, Wait for CI, variables de puerto y healthcheck `/health`.
+3. Solo después, activar Wait for CI y autodeploy.
+4. Aceptar el release únicamente si Railway registra el SHA exacto de `main`, termina en `SUCCESS` y
+   `GET /health` responde `200`. Un despliegue bloqueado por CI debe quedar `SKIPPED`.
+
+### Rollback
+
+Desactivar primero autodeploy, restaurar en Railway un deployment conocido como bueno y volver a
+comprobar SHA, estado `SUCCESS`, logs, métricas y `/health`. No restaurar automatización VPS.
 
 ## Pendientes vivos
 
+- [ ] Gates de activación del CD del worker en Railway (branch protection en `main`, re-verificación de
+  la config de Railway, luego habilitar Wait for CI + autodeploy) — ver "Activación segura" arriba.
 - [ ] Switch de **Production Branch** a `main` en Vercel (dashboard → Settings → Git) + redeploy.
 - [ ] Redirect URIs de Google OAuth para el dominio de Vercel (login bloqueado hasta entonces).
-- [ ] CI/CD del worker en Railway + retiro de los workflows del VPS (`chore/railway-cicd`).
 - [ ] Feature 007 (sincronización de estados de la extensión) — abierta, pendiente
   ([`spec/features/007-extension-status-sync/`](../spec/features/007-extension-status-sync/spec.md)).

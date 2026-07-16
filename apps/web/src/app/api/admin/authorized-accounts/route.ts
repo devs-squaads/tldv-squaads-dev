@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/auth";
-import { AuthorizedAccountRepository } from "@meeting-bot/shared/repositories/AuthorizedAccountRepository";
+import { authOptions, type AuthorizedAccountsDependencies as Dependencies } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+async function get({ getServerSession, AuthorizedAccountRepository }: Dependencies) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -18,7 +17,7 @@ export async function GET() {
   return NextResponse.json({ accounts });
 }
 
-export async function POST(request: Request) {
+async function post(request: Request, { getServerSession, AuthorizedAccountRepository }: Dependencies) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -41,3 +40,8 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ account });
 }
+
+const productionDependencies: Dependencies = { getServerSession, AuthorizedAccountRepository: { findAll: async () => (await import("@meeting-bot/shared/repositories/AuthorizedAccountRepository")).AuthorizedAccountRepository.findAll(), upsert: async (input) => (await import("@meeting-bot/shared/repositories/AuthorizedAccountRepository")).AuthorizedAccountRepository.upsert(input) } };
+
+export const GET = () => get((globalThis as typeof globalThis & { __squaadsAdminRouteDependencies?: { authorizedAccounts?: Dependencies } }).__squaadsAdminRouteDependencies?.authorizedAccounts ?? productionDependencies);
+export const POST = (request: Request) => post(request, (globalThis as typeof globalThis & { __squaadsAdminRouteDependencies?: { authorizedAccounts?: Dependencies } }).__squaadsAdminRouteDependencies?.authorizedAccounts ?? productionDependencies);

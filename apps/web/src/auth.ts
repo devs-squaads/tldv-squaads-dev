@@ -1,11 +1,69 @@
 import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
-import { UserRepository } from "@/repositories/UserRepository";
-import { CalendarAccountRepository } from "@meeting-bot/shared/repositories/CalendarAccountRepository";
-import {
-  AuthorizedAccountRepository,
-  type AuthorizedAccountRole,
-} from "@meeting-bot/shared/repositories/AuthorizedAccountRepository";
+import type { AuthorizedAccountRole } from "@meeting-bot/shared/repositories/AuthorizedAccountRepository";
+
+interface AuthorizedAccountSummary {
+  role: AuthorizedAccountRole;
+  isActive: boolean;
+}
+
+interface AuthorizedAccountInput extends AuthorizedAccountSummary {
+  email: string;
+}
+
+interface GoogleUserInput {
+  id: string;
+  name: string | null;
+  email: string;
+  image: string | null;
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: number;
+}
+
+interface CalendarTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: number;
+}
+
+export interface AuthCallbackDependencies {
+  findAuthorizedAccount(email: string): Promise<AuthorizedAccountSummary | null>;
+  upsertAuthorizedAccount(input: AuthorizedAccountInput): Promise<AuthorizedAccountSummary>;
+  upsertUserFromGoogle(input: GoogleUserInput): Promise<unknown>;
+  updateCalendarTokens(userId: string, tokens: CalendarTokens): Promise<unknown>;
+}
+
+export type AuthorizedAccountsDependencies = { getServerSession: typeof import("next-auth")["getServerSession"]; AuthorizedAccountRepository: Pick<typeof import("@meeting-bot/shared/repositories/AuthorizedAccountRepository")["AuthorizedAccountRepository"], "findAll" | "upsert"> };
+export type AuthorizedAccountEmailDependencies = { getServerSession: typeof import("next-auth")["getServerSession"]; AuthorizedAccountRepository: Pick<typeof import("@meeting-bot/shared/repositories/AuthorizedAccountRepository")["AuthorizedAccountRepository"], "findAll" | "findByEmail" | "remove" | "setActive" | "setRole"> };
+const adminRouteDependencies = globalThis as typeof globalThis & { __squaadsAdminRouteDependencies?: { authorizedAccounts?: AuthorizedAccountsDependencies; authorizedAccountEmail?: AuthorizedAccountEmailDependencies } };
+export function createAuthorizedAccountsHandlers(dependencies: AuthorizedAccountsDependencies) { (adminRouteDependencies.__squaadsAdminRouteDependencies ??= {}).authorizedAccounts = dependencies; return import("@/app/api/admin/authorized-accounts/route"); }
+export function createAuthorizedAccountEmailHandlers(dependencies: AuthorizedAccountEmailDependencies) { (adminRouteDependencies.__squaadsAdminRouteDependencies ??= {}).authorizedAccountEmail = dependencies; return import("@/app/api/admin/authorized-accounts/[email]/route"); }
+
+const defaultAuthCallbackDependencies: AuthCallbackDependencies = {
+  async findAuthorizedAccount(email) {
+    const { AuthorizedAccountRepository } = await import(
+      "@meeting-bot/shared/repositories/AuthorizedAccountRepository"
+    );
+    return AuthorizedAccountRepository.findByEmail(email);
+  },
+  async upsertAuthorizedAccount(input) {
+    const { AuthorizedAccountRepository } = await import(
+      "@meeting-bot/shared/repositories/AuthorizedAccountRepository"
+    );
+    return AuthorizedAccountRepository.upsert(input);
+  },
+  async upsertUserFromGoogle(input) {
+    const { UserRepository } = await import("@/repositories/UserRepository");
+    return UserRepository.upsertFromGoogle(input);
+  },
+  async updateCalendarTokens(userId, tokens) {
+    const { CalendarAccountRepository } = await import(
+      "@meeting-bot/shared/repositories/CalendarAccountRepository"
+    );
+    return CalendarAccountRepository.updateTokens(userId, tokens);
+  },
+};
 
 function getSuperAdminEmails(): string[] {
   return (process.env.SUPER_ADMIN_EMAILS || "")
@@ -18,11 +76,14 @@ function getSuperAdminEmails(): string[] {
  * Allowlist gate: only emails already in `authorized_accounts` (or listed in
  * SUPER_ADMIN_EMAILS, auto-provisioned as admin) may sign in.
  */
-async function resolveAuthorizedRole(email: string): Promise<AuthorizedAccountRole | null> {
+async function resolveAuthorizedRole(
+  email: string,
+  dependencies: AuthCallbackDependencies,
+): Promise<AuthorizedAccountRole | null> {
   const normalizedEmail = email.toLowerCase();
 
   if (getSuperAdminEmails().includes(normalizedEmail)) {
-    const account = await AuthorizedAccountRepository.upsert({
+    const account = await dependencies.upsertAuthorizedAccount({
       email: normalizedEmail,
       role: "admin",
       isActive: true,
@@ -30,34 +91,22 @@ async function resolveAuthorizedRole(email: string): Promise<AuthorizedAccountRo
     return account.role;
   }
 
-  const account = await AuthorizedAccountRepository.findByEmail(normalizedEmail);
+  const account = await dependencies.findAuthorizedAccount(normalizedEmail);
   if (!account || !account.isActive) return null;
   return account.role;
 }
 
-export const authOptions: NextAuthOptions = {
-  providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-      authorization: {
-        params: {
-          // Identity only — Calendar access is requested separately from Settings.
-          scope: ["openid", "email", "profile"].join(" "),
-          prompt: "select_account",
-        },
-      },
-    }),
-  ],
-
-  callbacks: {
+export function createAuthCallbacks(
+  dependencies: AuthCallbackDependencies,
+): NonNullable<NextAuthOptions["callbacks"]> {
+  return {
     async signIn({ user, account }) {
       if (!account || !user.email) return false;
 
-      const role = await resolveAuthorizedRole(user.email);
+      const role = await resolveAuthorizedRole(user.email, dependencies);
       if (!role) return false;
 
-      await UserRepository.upsertFromGoogle({
+      await dependencies.upsertUserFromGoogle({
         id: user.id,
         name: user.name || null,
         email: user.email,
@@ -84,7 +133,7 @@ export const authOptions: NextAuthOptions = {
       // request instead of waiting up to the session's maxAge to expire.
       const email = user?.email ?? (token.email as string | undefined);
       if (email) {
-        const authorizedAccount = await AuthorizedAccountRepository.findByEmail(email.toLowerCase());
+        const authorizedAccount = await dependencies.findAuthorizedAccount(email.toLowerCase());
         token.role = authorizedAccount?.isActive ? authorizedAccount.role : undefined;
       }
 
@@ -112,7 +161,7 @@ export const authOptions: NextAuthOptions = {
 
               // Update in DB too
               if (token.userId) {
-                await CalendarAccountRepository.updateTokens(token.userId as string, {
+                await dependencies.updateCalendarTokens(token.userId as string, {
                   accessToken: data.access_token,
                   expiresAt: token.expiresAt as number,
                   ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
@@ -135,7 +184,25 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
-  },
+  };
+}
+
+export const authOptions: NextAuthOptions = {
+  providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID || "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+      authorization: {
+        params: {
+          // Identity only — Calendar access is requested separately from Settings.
+          scope: ["openid", "email", "profile"].join(" "),
+          prompt: "select_account",
+        },
+      },
+    }),
+  ],
+
+  callbacks: createAuthCallbacks(defaultAuthCallbackDependencies),
 
   pages: {
     signIn: "/login",
