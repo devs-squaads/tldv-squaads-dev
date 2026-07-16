@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import { describe, expect, it, mock, spyOn, beforeEach, afterEach } from "bun:test";
-import { AuthorizedAccountRepository } from "../../../../packages/shared/src/repositories/AuthorizedAccountRepository";
+const AuthorizedAccountRepository = { findAll: mock(() => Promise.resolve([] as never[])), upsert: mock((input: Record<string, unknown>) => Promise.resolve(input as never)) };
 
 const bunMock = mock as typeof mock & {
   module: (specifier: string, factory: () => unknown) => void;
@@ -11,17 +11,12 @@ const mockGetServerSession = mock(() => Promise.resolve(null as unknown));
 bunMock.module("next-auth", () => ({
   getServerSession: mockGetServerSession,
 }));
-bunMock.module("@/auth", () => ({
-  authOptions: {},
-}));
 
-// AuthorizedAccountRepository is spied on its real, unmocked class (see
-// apps/__tests__/helpers/dbSchemaMock.ts) instead of faked via mock.module,
-// so this file never competes with AuthorizedAccountRepository.test.ts for
-// the same resolved module path.
-const { GET, POST } = await import(
-  "../../../web/src/app/api/admin/authorized-accounts/route"
+// Inject local doubles without loading the production repository.
+const { createAuthorizedAccountsHandlers } = await import(
+  "../../../web/src/auth"
 );
+const { GET, POST } = await createAuthorizedAccountsHandlers({ getServerSession: mockGetServerSession, AuthorizedAccountRepository });
 
 describe("GET /api/admin/authorized-accounts", () => {
   let findAllSpy: ReturnType<typeof spyOn>;

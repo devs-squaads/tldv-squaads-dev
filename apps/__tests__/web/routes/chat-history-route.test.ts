@@ -55,36 +55,6 @@ bunMock.module("@/modules/chat/http/requestContext", () => ({
   ),
 }));
 
-// Mock trustBoundary
-const mockSanitizeMessageList = mock((messages: unknown) => {
-  if (!Array.isArray(messages)) {
-    throw new Error("Invalid message structure");
-  }
-  return messages.map((m: { role: string; content: string }) => ({
-    role: m.role,
-    content: typeof m.content === "string" ? m.content.trim() : "",
-  }));
-});
-
-const mockSanitizePersistedHistory = mock((messages: unknown) => {
-  if (!Array.isArray(messages)) return [];
-  return messages.filter(
-    (m: { role: string; content: string }) =>
-      (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim(),
-  );
-});
-
-bunMock.module("@/modules/chat/http/trustBoundary", () => ({
-  ChatTrustBoundaryError: class ChatTrustBoundaryError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = "ChatTrustBoundaryError";
-    }
-  },
-  sanitizeMessageList: mockSanitizeMessageList,
-  sanitizePersistedHistory: mockSanitizePersistedHistory,
-}));
-
 // Mock ChatMessageRepository
 let repositoryFindByUserIdCalls: string[] = [];
 let repositoryReplaceForUserCalls: Array<{ userId: string; messages: unknown[] }> = [];
@@ -116,11 +86,6 @@ bunMock.module("@/repositories/ChatMessageRepository", () => ({
   },
 }));
 
-// Mock contracts
-bunMock.module("@/modules/chat/http/contracts", () => ({
-  PersistableChatMessage: {},
-}));
-
 // Import the route after mocking
 const { GET, POST, DELETE } = await import("../../../web/src/app/api/chat/history/route");
 
@@ -128,7 +93,6 @@ describe("GET /api/chat/history", () => {
   beforeEach(() => {
     mockGetServerSession.mockClear();
     mockFindByUserId.mockClear();
-    mockSanitizePersistedHistory.mockClear();
     repositoryFindByUserIdCalls = [];
   });
 
@@ -184,7 +148,6 @@ describe("GET /api/chat/history", () => {
 describe("POST /api/chat/history", () => {
   beforeEach(() => {
     mockGetServerSession.mockClear();
-    mockSanitizeMessageList.mockClear();
     mockReplaceForUser.mockClear();
     repositoryReplaceForUserCalls = [];
   });

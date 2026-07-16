@@ -47,10 +47,6 @@ function setupHarness(options: HarnessOptions) {
     },
   }));
 
-  moduleMock.module("@/bot/providers/OnlineMeetingProvider", () => ({
-    ADMISSION_TIMEOUT_ERROR_TAG: "ADMISSION_TIMEOUT",
-  }));
-
   moduleMock.module("@meeting-bot/shared/repositories/MeetingRepository", () => ({
     MeetingRepository: {
       findById: async () => ({ ...meeting }),
@@ -67,10 +63,6 @@ function setupHarness(options: HarnessOptions) {
         uploadFile: async () => ({ url: UPLOADED_RECORDING_URL }),
       }),
     },
-  }));
-
-  moduleMock.module("@meeting-bot/shared/meetingProvider", () => ({
-    buildRecordingStorageKey: () => "google-meet/meeting-1.mp4",
   }));
 
   moduleMock.module("@/services/meetingAiProcessingService", () => ({
