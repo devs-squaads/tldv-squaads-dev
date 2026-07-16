@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { autoJoinPollAndEnqueue } from "@/services/autoJoinService";
 import { refineMeetingSummary, reprocessMeetingTranscription, retryRejectedMeeting } from "@/services/meetingRecoveryService";
+import { resolveWorkerInternalPort } from "@/server/internalApiPort";
 
 function json(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
@@ -126,7 +127,7 @@ async function requestListener(req: IncomingMessage, res: ServerResponse): Promi
 }
 
 export async function startInternalApiServer(): Promise<{ stop: () => Promise<void> }> {
-  const port = Number(process.env.WORKER_INTERNAL_PORT || 4000);
+  const port = resolveWorkerInternalPort(process.env);
   const server = createServer((req, res) => {
     void requestListener(req, res).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Unknown internal API error";

@@ -276,12 +276,10 @@ bun run build:web
 * La configuración de build vive versionada en `apps/web/vercel.json` (Root Directory del proyecto Vercel = `apps/web`; la instalación corre desde la raíz del workspace de Bun).
 * El `web` solo encola reuniones y consulta estado; no ejecuta FFmpeg/Puppeteer.
 
-> **Este repo (`-dev`):** el worker de development corre en **Railway** y el web en **Vercel** — mapa
-> operativo completo, variables e instrucciones de deploy en [`docs/deployment.md`](docs/deployment.md)
-> (decisión en [`docs/adr/0001-worker-railway-dev.md`](docs/adr/0001-worker-railway-dev.md)). Los
-> workflows `deploy-{development,production}.yml` y `deploy.sh` heredados del VPS están **inactivos para
-> este repo** (fallan por secrets ausentes); se retiran en la ronda de CI/CD (`chore/railway-cicd`). Lo
-> que sigue abajo describe el despliegue clásico en VPS, vigente para el repo/worker de producción.
+> **Este repo (`-dev`):** el worker corre en **Railway** y el web en **Vercel**. La guía operativa vigente
+> —CI, ramas, activación, rollback, variables y healthcheck— está en
+> [`docs/deployment.md`](docs/deployment.md). Railway es la única autoridad de CD del worker; `dev` nunca
+> despliega y `main` solo puede hacerlo con `CI / validate` verde.
 
 ### `worker` en servidor privado Docker
 * Desplegar el mismo repo con `ROLE=worker` y stack multimedia habilitado.
@@ -449,26 +447,7 @@ En esta extensión, probar `src` sin regenerar `dist` lleva a diagnósticos fals
 * `/docker-compose.yml`: Orquestación conjunta para desarrollo.
 * `/docker-compose.web.yml` y `/docker-compose.worker.yml`: despliegue separado por rol.
 
-## Despliegue automatizado del worker al servidor Squaads
+## Despliegue del worker
 
-El worker se despliega automáticamente al servidor Squaads desde GitHub Actions:
-- Push a rama `dev` → deploy a entorno development (`worker-tldv-dev.server.squaads.com`).
-- Push a rama `main` → deploy a production con approval manual en GitHub Environments (`worker-tldv.server.squaads.com`).
-
-El web vive en Vercel y se despliega por separado. DB (Supabase) y S3 son servicios gestionados externos.
-
-### Setup inicial (una vez)
-1. Configurar secrets en GitHub Settings → Environments (`development` y `production`). Para cada environment, crear las variables listadas en `.env.dev.example` / `.env.prod.example`.
-2. Añadir en Settings → Secrets and variables → Actions: `SSH_PRIVATE_KEY`, `SSH_USER=root`, `SERVER_HOST=server.squaads.com`.
-3. En el environment `production`, activar "Required reviewers" para approval manual antes de deploys a main.
-4. En el servidor Squaads: verificar que la red Docker `nginx_network` existe (`docker network ls | grep nginx_network`). Si no, crearla: `docker network create nginx_network`.
-5. En Nginx Proxy Manager (`server.squaads.com:81`) crear dos Proxy Hosts:
-   - `worker-tldv-dev.server.squaads.com` → `meeting-worker-dev:4000` (SSL Let's Encrypt, Force SSL).
-   - `worker-tldv.server.squaads.com` → `meeting-worker-prod:4000` (SSL Let's Encrypt, Force SSL).
-6. En Vercel (proyecto web): setear `WORKER_INTERNAL_BASE_URL=https://worker-tldv.server.squaads.com` (y la de preview si aplica).
-
-### Deploy manual
-Desde el servidor, con el repo en `/root/clients/tldv-squaads/` y `.env.{dev,prod}` generados:
-```bash
-./deploy.sh development    # o production
-```
+La fuente única de instrucciones activas es [`docs/deployment.md`](docs/deployment.md). No hay deploy
+del worker desde GitHub Actions ni scripts VPS en este repositorio.
