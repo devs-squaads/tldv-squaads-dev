@@ -1,6 +1,6 @@
 # 006 · Migrar el despliegue del worker a Railway (solo development)
 
-**Estado:** propuesta
+**Estado:** implementado ✅ (16/07/2026 — ADR en `docs/adr/0001-worker-railway-dev.md`, contexto operativo en `docs/deployment.md`)
 
 ## Qué hace
 
@@ -44,14 +44,18 @@ integración/manual de `AGENTS.md`: captura multimedia del worker con Puppeteer 
       round-trip PutObject/GetObject/DeleteObject usando el `S3StorageProvider` actual, sin cambios de
       código. El endpoint público del MinIO del VPS quedó descartado: sirve la consola, no la API S3, y no
       hay acceso al VPS para exponerla.
-- [ ] El servicio worker en Railway (proyecto `TLDV-DEV`, environment `dev-remote`) alcanza estado de
-      deploy `SUCCESS` construyendo desde `Dockerfile.worker`.
-- [ ] `GET /health` responde `200` desde el dominio público que asigna Railway.
-- [ ] El worker-dev del VPS queda parado: solo el worker de Railway pollea la cola de dev en Supabase.
-- [ ] Una grabación de prueba corta llega a estado `completed`: MP4 subido al S3 del VPS +
-      transcripción + resumen generados.
-- [ ] Sin crashes de `/dev/shm` de Chromium en los logs. Si aparecieron, se confirman resueltos tras
-      aplicar `--disable-dev-shm-usage` a los args de Puppeteer.
+- [x] El servicio worker en Railway (proyecto `TLDV-DEV`, environment `dev-remote`) alcanza estado de
+      deploy `SUCCESS` construyendo desde `Dockerfile.worker`. (Deploys `497ec914-…` y `a2e75bba-…`
+      confirmados `SUCCESS`.)
+- [x] `GET /health` responde `200` desde el dominio público que asigna Railway
+      (`https://worker-dev-remote.up.railway.app`).
+- [x] Solo el worker de Railway pollea la cola de dev: resuelto con una **Supabase dedicada para dev**
+      (ref `ljer…`) a la que el worker viejo del VPS no apunta — no hizo falta tocar el VPS.
+- [x] Una grabación de prueba llega a estado `completed`: MP4 subido al **bucket de Railway**
+      (`tldv-meetings-dev-wlwoxrq`) + transcripción (Groq) + resumen generados; reproducción y descarga
+      verificadas desde la web (16/07/2026).
+- [x] Sin crashes de `/dev/shm` de Chromium en los logs a lo largo de varios deploys y grabaciones —
+      no hizo falta `--disable-dev-shm-usage`.
 
 ## Fuera de alcance
 
