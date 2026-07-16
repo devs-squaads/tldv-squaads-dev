@@ -3,14 +3,11 @@
 import { describe, expect, it, mock, beforeEach } from "bun:test";
 
 // Mock modules before importing the route
-const mockedModules: Record<string, unknown> = {};
-
 const bunMock = mock as typeof mock & {
   module: (specifier: string, factory: () => unknown) => void;
 };
 
-// Mock next-auth - use `any` to allow both session and null returns
-const mockGetServerSession = mock(() => Promise.resolve(null as any));
+const mockGetServerSession = mock(() => Promise.resolve(null as { user: { id: string } } | null));
 
 bunMock.module("next-auth", () => ({
   getServerSession: mockGetServerSession,

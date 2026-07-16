@@ -1,0 +1,31 @@
+# .railwayignore — controls what `railway up` uploads as the build context for
+# the worker service. Keep only what Dockerfile.worker needs; exclude the rest
+# so the upload is small and no local secrets leak.
+#
+# Dockerfile.worker builds a REDUCED Bun workspace (apps/worker/package.root-worker.json
+# is copied as the root package.json), so apps/web and apps/extension are not needed.
+# .git and node_modules are excluded by Railway automatically.
+
+# Other apps (not part of the reduced worker workspace)
+apps/web/
+apps/extension/
+apps/__tests__/
+
+# Docs, specs, tooling and meta
+docs/
+spec/
+.github/
+.codegraph/
+.openclaw/
+.claude/
+SOUL.md
+*.md
+
+# Local env files — never upload secrets
+.env
+.env.*
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store

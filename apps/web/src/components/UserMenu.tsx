@@ -3,6 +3,7 @@
 import { useSession, signOut } from "next-auth/react";
 import { useState, useRef, useEffect } from "react";
 import { LogOut, User } from "lucide-react";
+import Image from "next/image";
 
 export function UserMenu() {
   const { data: session } = useSession();
@@ -35,11 +36,14 @@ export function UserMenu() {
         }}
       >
         {user.image ? (
-          <img
+          <Image
             src={user.image}
             alt={user.name || ""}
+            width={40}
+            height={40}
             className="w-full h-full object-cover"
             referrerPolicy="no-referrer"
+            loading="eager"
           />
         ) : (
           <User className="h-4 w-4 text-[var(--foreground)]" />

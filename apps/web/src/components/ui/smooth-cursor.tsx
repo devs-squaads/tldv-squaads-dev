@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { scheduleNextAnimationFrame } from "./animationLoop";
 
 interface Position {
   x: number;
@@ -15,12 +16,13 @@ export function SmoothCursor() {
   const targetPos = useRef<Position>({ x: -100, y: -100 });
   const velocity = useRef<Position>({ x: 0, y: 0 });
   const lastPos = useRef<Position>({ x: 0, y: 0 });
-  const lastTime = useRef(Date.now());
+  const lastTime = useRef(0);
   const currentRotation = useRef(0);
   const targetRotation = useRef(0);
   const currentScale = useRef(1);
   const targetScale = useRef(1);
   const rafId = useRef(0);
+  const animateRef = useRef<(() => void) | null>(null);
   const [isEnabled, setIsEnabled] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
 
@@ -44,8 +46,12 @@ export function SmoothCursor() {
       cursorRef.current.style.transform = `translate(${currentPos.current.x}px, ${currentPos.current.y}px) rotate(${currentRotation.current}deg) scale(${currentScale.current})`;
     }
 
-    rafId.current = requestAnimationFrame(animate);
+    rafId.current = scheduleNextAnimationFrame(requestAnimationFrame, () => animateRef.current ?? (() => {}));
   }, []);
+
+  useEffect(() => {
+    animateRef.current = animate;
+  }, [animate]);
 
   useEffect(() => {
     const mq = window.matchMedia(DESKTOP_POINTER_QUERY);
@@ -68,6 +74,7 @@ export function SmoothCursor() {
       setIsVisible(true);
 
       const now = Date.now();
+      if (lastTime.current === 0) lastTime.current = now;
       const dt = now - lastTime.current;
 
       if (dt > 0) {

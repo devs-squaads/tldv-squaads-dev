@@ -123,40 +123,52 @@ async function processMeetingAsync({
       endsAt: now,
     });
 
-    const settings = await loadGlobalTranscriptionSettings();
-    const transcriptionOptions = await resolveTranscriptionOptions();
-    const rawTranscription = await transcribeRecording(outputPath, transcriptionOptions);
+    // The recording is already uploaded: AI failures below must never restart
+    // the capture pipeline (rejoining the meeting), so they are non-retryable.
+    try {
+      const settings = await loadGlobalTranscriptionSettings();
+      const transcriptionOptions = await resolveTranscriptionOptions();
+      const rawTranscription = await transcribeRecording(outputPath, transcriptionOptions);
 
-    const transcription = await refineTranscriptionResult(rawTranscription, settings);
-    const transcript = serializeTranscript(transcription.segments, transcription.text);
+      const transcription = await refineTranscriptionResult(rawTranscription, settings);
+      const transcript = serializeTranscript(transcription.segments, transcription.text);
 
-    if (!hasSummaryProvider()) {
+      if (!hasSummaryProvider()) {
+        await MeetingRepository.updateById(meetingId, {
+          rawTranscription: transcript,
+          status: "completed",
+          updatedAt: new Date(),
+        });
+        return { success: true, retryable: true };
+      }
+
+      const summaryContext = settings.context || undefined;
+      const summaryProvider = SummaryProviderFactory.getProvider();
       await MeetingRepository.updateById(meetingId, {
+        status: "summarizing",
         rawTranscription: transcript,
+        updatedAt: new Date(),
+      });
+
+      const smartSummary = withSummaryDuration(
+        await summaryProvider.summarize(transcript, { context: summaryContext }),
+        transcription,
+      );
+      await MeetingRepository.updateById(meetingId, {
         status: "completed",
+        summary: JSON.stringify(smartSummary),
         updatedAt: new Date(),
       });
       return { success: true, retryable: true };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown AI processing error";
+      await MeetingRepository.updateById(meetingId, {
+        status: "error",
+        errorMessage: `La grabación se guardó, pero falló el procesamiento de IA: ${message}`,
+        updatedAt: new Date(),
+      });
+      return { success: false, retryable: false };
     }
-
-    const summaryContext = settings.context || undefined;
-    const summaryProvider = SummaryProviderFactory.getProvider();
-    await MeetingRepository.updateById(meetingId, {
-      status: "summarizing",
-      rawTranscription: transcript,
-      updatedAt: new Date(),
-    });
-
-    const smartSummary = withSummaryDuration(
-      await summaryProvider.summarize(transcript, { context: summaryContext }),
-      transcription,
-    );
-    await MeetingRepository.updateById(meetingId, {
-      status: "completed",
-      summary: JSON.stringify(smartSummary),
-      updatedAt: new Date(),
-    });
-    return { success: true, retryable: true };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown processing error";
 

@@ -64,8 +64,9 @@ Ejemplo de salida correcta:
 
     const result = JSON.parse(completionText) as SummaryResult;
     return result;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error generating summary with OpenAI:", error);
-    throw new Error(`Failed to generate summary: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to generate summary: ${message}`);
   }
 }

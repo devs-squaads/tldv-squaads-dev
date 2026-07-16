@@ -47,6 +47,8 @@ yarn-error.log*
 # Environment overrides with real secrets (never commit)
 .env.dev
 .env.prod
+.env.dev.railway
+.env*.railway
 
 # Service Account keys mounted into the worker container (never commit)
 /resources/*
@@ -92,9 +94,14 @@ apps/extension/dist/
 # Filtra rutas absolutas locales (C:\Users\...) — no debe versionarse.
 .atl/
 
+# Gentle Codegraph: índice de skills generado por máquina.
+.codegraph/
+
 # Puente de skills para Claude (symlinks regenerables → .agents/skills/).
 # La fuente única versionada es .agents/skills/. Este puente es por-máquina.
 .claude/skills/
 
 # Overrides personales de permisos/config de Claude Code, no se versionan.
 .claude/settings.local.json
+
+.vercel

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
+import { scheduleNextAnimationFrame } from "./animationLoop";
 
 interface VenomBeamProps {
   children: React.ReactNode;
@@ -42,6 +43,7 @@ export default function VenomBeam({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number>(0);
+  const animateRef = useRef<(() => void) | null>(null);
   const beams = useRef<Beam[]>([]);
   const particles = useRef<Particle[]>([]);
   const time = useRef(0);
@@ -180,8 +182,12 @@ export default function VenomBeam({
       return true;
     });
 
-    animRef.current = requestAnimationFrame(animate);
+    animRef.current = scheduleNextAnimationFrame(requestAnimationFrame, () => animateRef.current ?? (() => {}));
   }, [color, beamCount, particleCount, spawnBeam]);
+
+  useEffect(() => {
+    animateRef.current = animate;
+  }, [animate]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
