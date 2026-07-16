@@ -27,6 +27,14 @@ _Fases completadas, en orden de implementación (heredadas del tracking previo).
     UX de PR #33) más inyección en vivo del rol del usuario (admin/member) en `buildUserContext`. Contenido
     aditivo, sin cambios de tool surface, env ni retriever. Detalle en
     [`features/005-chat-knowledge-refresh/`](../features/005-chat-knowledge-refresh/spec.md).
+11. **006 · Worker de development en Railway** — worker-dev migrado del VPS a Railway (proyecto
+    `TLDV-DEV`), con bucket S3 de Railway y Supabase dedicada para la cola de dev; E2E validado
+    (grabación → transcripción → resumen → `completed`) e incluye el fix de retry por etapas
+    (post-upload no re-entra al Meet). Web desplegada en Vercel con configs versionadas. ADR en
+    [`../../docs/adr/0001-worker-railway-dev.md`](../../docs/adr/0001-worker-railway-dev.md), contexto
+    operativo en [`../../docs/deployment.md`](../../docs/deployment.md). Detalle en
+    [`features/006-worker-railway-dev/`](../features/006-worker-railway-dev/spec.md). **Pendiente
+    heredado**: CI/CD del worker en Railway + retiro de workflows del VPS (rama `chore/railway-cicd`).
 
 ## Siguiente 🔜
 
