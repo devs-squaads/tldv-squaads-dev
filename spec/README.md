@@ -30,5 +30,9 @@ spec/
    `bun run typecheck` · `bun test apps/__tests__` · `bun run lint` · `bun run build:web`.
 6. Actualizar `constitution/roadmap.md` (mover la feature a "Hecho").
 
+> Tras implementar, el PR sigue el flujo CI/CD verificado: feature→`dev` (CI `CI / validate`) → merge →
+> PR `dev`→`main` (gobernanza `devs-squaads`, `Guard main PR source`) → Railway CD solo desde `main`. `dev`
+> nunca despliega. Detalle en `docs/deployment.md`.
+
 > La constitución manda: si una feature choca con `mission.md` o `tech-stack.md`, se replantea la
 > feature, no la constitución. El cerebro operativo para agentes/devs es `../AGENTS.md`.

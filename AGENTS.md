@@ -38,8 +38,8 @@ resume con IA. Para equipos que quieren control y privacidad de sus grabaciones 
 - `spec/` — ciclo SDD: `constitution/` (las leyes) + `features/NNN-…/` (qué→cómo→tareas).
 - `docs/` — documentación profunda (extensión, observabilidad) e histórico congelado.
 - `.agents/skills/` — skills del proyecto (ver Documentación).
-- `.github/workflows/` — CI/CD: deploy automatizado del worker (`deploy.sh`).
-- Raíz: `docker-compose*.yml`, `Dockerfile.*`, `deploy.sh` (contrato de despliegue).
+- `.github/workflows/` — CI (`ci.yml`: tests, lint, typecheck, build Docker) + `main-pr-source-guard.yml` (PR a `main` solo desde `dev` del mismo repo).
+- Raíz: `docker-compose*.yml`, `Dockerfile.*`, `railway.json` (contrato de despliegue; Railway CD desde `main`).
 
 ## Convenciones
 
@@ -56,8 +56,8 @@ resume con IA. Para equipos que quieren control y privacidad de sus grabaciones 
 
 - No uses `npm`/`yarn` (bun-only).
 - No grabes con extensiones de Chrome ni `puppeteer-stream` — la captura es FFmpeg a nivel sistema.
-- No pushees a `dev`/`main` sin intención de desplegar: **dispara un deploy real del worker** (GitHub Actions). Trabajá en ramas feature y mergeá por PR.
-- No toques el contrato de despliegue (`Dockerfile.*`, `docker-compose*.yml`, `deploy.sh`, `.github/workflows/deploy-*.yml`) para lógica de app, ni sobreescribas env en compose (SSOT en `.env*`); avisá explícitamente si hay que tocarlos.
+- No pushees directo a `dev`/`main`: trabajá en ramas feature y mergeá por PR. `dev` corre CI pero **nunca** despliega; `main` es la única rama de deploy (Railway CD).
+- No toques el contrato de despliegue (`Dockerfile.*`, `docker-compose*.yml`, `railway.json`, `.github/workflows/*.yml`) para lógica de app, ni sobreescribas env en compose (SSOT en `.env*`); avisá explícitamente si hay que tocarlos.
 - No mezcles rol `web` y `worker` en la misma instancia de producción.
 - No subas `.env*` reales al repo (solo los `.example`).
 - No asumas versiones de librerías de memoria — consultá Context7.
@@ -71,10 +71,23 @@ resume con IA. Para equipos que quieren control y privacidad de sus grabaciones 
 - Si no estás seguro al 80%, **preguntá**. No inventes.
 - Ante un riesgo técnico/seguridad o violación del diseño: **detente e informa**.
 
+### Flujo CI/CD (verificado)
+
+1. Rama feature desde `dev` (nunca directo sobre `dev`/`main`).
+2. PR feature → `dev`.
+3. CI corre `CI / validate` (tests, lint, typecheck, build de `Dockerfile.worker`).
+4. Merge a `dev` tras CI verde + revisión.
+5. PR `dev` → `main` — **gobernanza:** requiere aprobación de `devs-squaads`; `Guard main PR source` verifica que el origen sea `dev` del mismo repo.
+6. CI corre de nuevo sobre `main`.
+7. Merge a `main` tras CI verde + guard.
+8. Railway auto-despliega desde `main` (Wait for CI gates; `GET /health` debe responder `200`).
+
+**Reglas:** `dev` corre CI pero **nunca** despliega. `main` es la **única** rama de deploy. Railway es la única autoridad de CD y rollback. Rollback: desactivar autodeploy de Railway y restaurar el último deployment conocido como bueno. Detalle en `docs/deployment.md`.
+
 ## Documentación
 
 - **Información del proyecto** (arquitectura, setup, env, endpoints) → `README.md`.
-- **Despliegue del worker (CI/CD)** → `README.md` → "Despliegue automatizado del worker al servidor Squaads" (push a `dev`/`main` despliega; `deploy.sh` + GitHub Actions).
+- **Despliegue del worker (CI/CD)** → `docs/deployment.md` (flujo feature→dev→main→Railway, rollback). CI en `dev`+`main`; CD solo desde `main` vía Railway.
 - **Las LEYES completas** (stack, modelo de datos, las 14 reglas mandatorias, límites duros) → `spec/constitution/tech-stack.md`. Misión y alcance → `spec/constitution/mission.md`. Estado/roadmap → `spec/constitution/roadmap.md`.
 - **Features en curso** → `spec/features/NNN-…/`. Guía del flujo → `spec/README.md`.
 - **Docs profundas** → `docs/` (extensión, observabilidad). Histórico pre-SDD congelado → `docs/PROJECT_PROGRESS_LOG.md`.
