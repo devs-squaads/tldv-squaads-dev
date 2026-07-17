@@ -1,6 +1,6 @@
 /// <reference types="bun" />
 
-import { describe, expect, it, mock, spyOn, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
 const AuthorizedAccountRepository = { findAll: mock(() => Promise.resolve([] as never[])), findByEmail: mock(() => Promise.resolve(null as never)), remove: mock(() => Promise.resolve()), setActive: mock(() => Promise.resolve()), setRole: mock(() => Promise.resolve()) };
 
 const bunMock = mock as typeof mock & {
@@ -19,6 +19,10 @@ const { createAuthorizedAccountEmailHandlers } = await import(
 const { PATCH, DELETE } = await createAuthorizedAccountEmailHandlers({ getServerSession: mockGetServerSession, AuthorizedAccountRepository });
 
 type AccountRow = { email: string; role: "admin" | "member"; isActive: boolean };
+
+afterAll(() => {
+  delete (globalThis as typeof globalThis & { __squaadsAdminRouteDependencies?: unknown }).__squaadsAdminRouteDependencies;
+});
 
 describe("PATCH /api/admin/authorized-accounts/[email]", () => {
   let setActiveSpy: ReturnType<typeof spyOn>;
