@@ -14,13 +14,13 @@
 - **IA:** Transcripción Groq Whisper (`whisper-large-v3`, fallback Deepgram); resumen Gemini
   (`gemini-3.1-flash-lite`, fallback Groq `llama-3.1-8b-instant` u OpenAI). Solo en el worker.
 - **Estilos:** Tailwind CSS + shadcn/ui.
-- **Contenedores / infra:** Docker + Docker Compose. Compose unificado para desarrollo (`docker-compose.yml`),
-  composes por servicio (`docker-compose.{web,worker,postgres,minio}.yml`) y composes de deploy del worker
-  (`docker-compose.worker.{development,production}.yml`, red externa `nginx_network`), con `Dockerfile.web`/`Dockerfile.worker`.
-- **CI/CD (deploy automatizado):** el `worker` se despliega **solo** vía GitHub Actions
-  (`.github/workflows/deploy-development.yml` y `deploy-production.yml`) ejecutando `deploy.sh` por SSH:
-  **push a `dev` → entorno development; push a `main` → production (con approval manual)**. El `web` va en
-  Vercel. Detalle completo en `README.md` → "Despliegue automatizado del worker al servidor Squaads".
+- **Contenedores / infra:** Docker + Docker Compose. Compose unificado para desarrollo (`docker-compose.yml`)
+  y composes por servicio (`docker-compose.{web,worker,postgres,minio}.yml`), con `Dockerfile.web`/`Dockerfile.worker`.
+- **CI/CD:** CI vía `.github/workflows/ci.yml` (job `CI / validate`: tests, lint, typecheck, build de
+  `Dockerfile.worker`) sobre pushes y PRs de `dev` y `main`. `.github/workflows/main-pr-source-guard.yml`
+  exige que todo PR a `main` venga de `dev` del mismo repo. CD del worker **solo** desde `main` vía Railway
+  (`railway.json`, Wait for CI gates, `GET /health` = `200`). `dev` corre CI pero **nunca** despliega. El
+  `web` va en Vercel. Detalle en `docs/deployment.md`.
 
 > **Versiones y docs actualizadas = Context7.** La fuente de verdad para la versión y la API real de cualquier
 > librería/SDK/framework de este stack es **Context7** (MCP `context7`): resolvé la doc antes de asumir una
@@ -171,10 +171,10 @@ _Lo que NUNCA se debe hacer._
 - **SSOT de variables en compose:** prohibido sobreescribir env en `docker-compose*.yml` con defaults (`:-`),
   hardcodes o duplicados de negocio. La verdad es `.env` + override por entorno. Compose solo fija flags
   estructurales (`ROLE`, `NODE_ENV`, `IS_DOCKER`).
-- **`push` a `dev` o `main` DISPARA UN DEPLOY REAL del worker** (GitHub Actions). No pushees a esas ramas sin
-  intención de desplegar: trabajá en ramas feature y mergeá por PR. `main` lleva approval manual; `dev` no.
+- **NUNCA pushear directo a `dev` o `main`.** Trabajá en ramas feature y mergeá por PR. `dev` corre CI pero
+  **nunca** despliega; `main` es la **única** rama de deploy (Railway CD, con Wait for CI gates y `/health`).
 - **No tocar el contrato de despliegue sin alerta explícita** al dev: `Dockerfile.web` / `Dockerfile.worker`,
-  `docker-compose*.yml` (incluidos los `docker-compose.worker.{development,production}.yml`), `deploy.sh` y
-  `.github/workflows/deploy-*.yml`. Antes de tocarlos, revisar si la lógica pertenece a `web/worker/shared`.
+  `docker-compose*.yml`, `railway.json` y `.github/workflows/*.yml` (`ci.yml`, `main-pr-source-guard.yml`).
+  Antes de tocarlos, revisar si la lógica pertenece a `web/worker/shared`.
 - **No mezclar rol `web` y `worker`** en la misma instancia de producción; no acoplar DB/S3 dentro de esos hosts.
 - **No subir `.env*` reales al repo** (solo los `.example`).

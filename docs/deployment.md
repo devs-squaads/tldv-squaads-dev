@@ -74,6 +74,19 @@
 - **Worker:** Railway es la única autoridad de CD. Solo un push elegible a `main`, para el mismo SHA con
   `CI / validate` verde, puede desplegar. `dev` nunca despliega.
 
+### Release flow (feature → dev → main → Railway)
+
+1. Rama feature desde `dev` (nunca directo sobre `dev`/`main`).
+2. PR feature → `dev`. CI corre `CI / validate` (tests, lint, typecheck, Docker build).
+3. Merge a `dev` tras CI verde + revisión. `dev` **nunca** despliega.
+4. PR `dev` → `main`. **Gobernanza:** requiere aprobación de `devs-squaads`.
+5. `Guard main PR source` verifica que el origen sea `dev` del mismo repo; CI corre de nuevo sobre `main`.
+6. Merge a `main` tras CI verde + guard.
+7. Railway auto-despliega desde `main` (Wait for CI gates). Aceptar el release solo si el deployment termina
+   en `SUCCESS` y `GET /health` responde `200`.
+
+> Railway es la única autoridad de CD y rollback. `dev` no tiene autoridad de release del worker.
+
 ### Watch scope del worker
 
 Railway debe observar `apps/worker/**`, `packages/shared/**`, `scripts/entrypoint.worker.sh`,
