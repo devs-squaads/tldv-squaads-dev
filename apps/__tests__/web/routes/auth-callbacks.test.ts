@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { authOptions, createAuthCallbacks } from "../../../web/src/auth";
+import { authOptions, createAuthCallbacks, createAuthProviders, isDevAuthBypassEnabled } from "../../../web/src/auth";
 
 const originalSuperAdmins = process.env.SUPER_ADMIN_EMAILS;
 
@@ -112,6 +112,56 @@ describe("auth.ts allowlist gate", () => {
 
       expect(result).toBe(false);
       expect(upsertUserFromGoogle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("dev auth bypass gate", () => {
+    it("is disabled on production regardless of the bypass email being set", () => {
+      expect(
+        isDevAuthBypassEnabled({ VERCEL_ENV: "production", DEV_AUTH_BYPASS_EMAIL: "dev@squaads.com" }),
+      ).toBe(false);
+    });
+
+    it("is disabled when no bypass email is configured", () => {
+      expect(isDevAuthBypassEnabled({ VERCEL_ENV: "preview" })).toBe(false);
+    });
+
+    it("is enabled on preview when a bypass email is configured", () => {
+      expect(
+        isDevAuthBypassEnabled({ VERCEL_ENV: "preview", DEV_AUTH_BYPASS_EMAIL: "dev@squaads.com" }),
+      ).toBe(true);
+    });
+
+    it("is enabled locally (no VERCEL_ENV) when a bypass email is configured", () => {
+      expect(isDevAuthBypassEnabled({ DEV_AUTH_BYPASS_EMAIL: "dev@squaads.com" })).toBe(true);
+    });
+  });
+
+  describe("createAuthProviders", () => {
+    it("only registers GoogleProvider when the bypass is disabled", () => {
+      const providers = createAuthProviders({ VERCEL_ENV: "production" });
+      expect(providers).toHaveLength(1);
+    });
+
+    it("registers the dev-bypass CredentialsProvider alongside Google when enabled", () => {
+      const providers = createAuthProviders({
+        VERCEL_ENV: "preview",
+        DEV_AUTH_BYPASS_EMAIL: "dev@squaads.com",
+      });
+      expect(providers).toHaveLength(2);
+      expect((providers[1] as unknown as { options: { id: string } }).options.id).toBe("dev-bypass");
+    });
+
+    it("the dev-bypass provider authorizes as the configured email", async () => {
+      const providers = createAuthProviders({
+        VERCEL_ENV: "preview",
+        DEV_AUTH_BYPASS_EMAIL: "dev@squaads.com",
+      });
+      const bypassProvider = providers[1] as unknown as {
+        options: { authorize: () => Promise<{ email: string } | null> };
+      };
+      const user = await bypassProvider.options.authorize();
+      expect(user).toEqual({ id: "dev-bypass", email: "dev@squaads.com", name: "Dev bypass", image: null });
     });
   });
 
