@@ -1,6 +1,6 @@
 /// <reference types="bun" />
 
-import { describe, expect, it, mock, spyOn, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
 const AuthorizedAccountRepository = { findAll: mock(() => Promise.resolve([] as never[])), upsert: mock((input: Record<string, unknown>) => Promise.resolve(input as never)) };
 
 const bunMock = mock as typeof mock & {
@@ -17,6 +17,10 @@ const { createAuthorizedAccountsHandlers } = await import(
   "../../../web/src/auth"
 );
 const { GET, POST } = await createAuthorizedAccountsHandlers({ getServerSession: mockGetServerSession, AuthorizedAccountRepository });
+
+afterAll(() => {
+  delete (globalThis as typeof globalThis & { __squaadsAdminRouteDependencies?: unknown }).__squaadsAdminRouteDependencies;
+});
 
 describe("GET /api/admin/authorized-accounts", () => {
   let findAllSpy: ReturnType<typeof spyOn>;
