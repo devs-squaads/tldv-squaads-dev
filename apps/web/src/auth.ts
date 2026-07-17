@@ -1,5 +1,6 @@
 import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import CredentialsProvider from "next-auth/providers/credentials";
 import type { AuthorizedAccountRole } from "@meeting-bot/shared/repositories/AuthorizedAccountRepository";
 
 interface AuthorizedAccountSummary {
@@ -187,11 +188,33 @@ export function createAuthCallbacks(
   };
 }
 
-export const authOptions: NextAuthOptions = {
-  providers: [
+/**
+ * Never true on Production: VERCEL_ENV is only absent (local) or "preview" outside
+ * of a real Production deployment, so a misconfigured DEV_AUTH_BYPASS_EMAIL can't
+ * leak the bypass into production even if someone copies it there by mistake.
+ */
+export function isDevAuthBypassEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.VERCEL_ENV !== "production" && Boolean(env.DEV_AUTH_BYPASS_EMAIL);
+}
+
+function createDevBypassProvider(env: NodeJS.ProcessEnv) {
+  return CredentialsProvider({
+    id: "dev-bypass",
+    name: "Dev bypass",
+    credentials: {},
+    async authorize() {
+      const email = env.DEV_AUTH_BYPASS_EMAIL;
+      if (!email) return null;
+      return { id: "dev-bypass", email, name: "Dev bypass", image: null };
+    },
+  });
+}
+
+export function createAuthProviders(env: NodeJS.ProcessEnv = process.env): NextAuthOptions["providers"] {
+  return [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+      clientId: env.GOOGLE_CLIENT_ID || "",
+      clientSecret: env.GOOGLE_CLIENT_SECRET || "",
       authorization: {
         params: {
           // Identity only — Calendar access is requested separately from Settings.
@@ -200,7 +223,12 @@ export const authOptions: NextAuthOptions = {
         },
       },
     }),
-  ],
+    ...(isDevAuthBypassEnabled(env) ? [createDevBypassProvider(env)] : []),
+  ];
+}
+
+export const authOptions: NextAuthOptions = {
+  providers: createAuthProviders(),
 
   callbacks: createAuthCallbacks(defaultAuthCallbackDependencies),
 
