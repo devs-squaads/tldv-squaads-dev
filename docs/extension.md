@@ -485,3 +485,77 @@ La mejor decision no es recuperar la extension anterior. La mejor decision es:
 4. Completar provider de Zoom como siguiente entrega controlada.
 
 Este enfoque es el mas profesional, el mas seguro y el de menor dificultad real para integrar sin sacrificar calidad de codigo.
+
+---
+
+## 13. Sincronizacion de Estados (Single Poller + Port)
+
+### Problema resuelto
+
+El polling HTTP puro con piso de 5s, dos loops independientes (widget y popup) contra los mismos
+endpoints, y re-render completo via `innerHTML` en cada respuesta causaban:
+
+- latencia alta en la refleccion de cambios de estado,
+- desincronizacion entre widget y popup,
+- parpadeo y perdida de interaccion (drag) al re-renderizar.
+
+### Arquitectura
+
+**Single Poller**: el service worker es el unico componente que hace `GET` de Meeting Status al
+backend por meeting activo. Widget y popup se suscriben via Port y nunca hacen fetch propio.
+
+**Port-as-keepalive**: el content script (widget) y el popup abren un `chrome.runtime.connect` de
+larga vida al SW. Ese Port es simultaneamente:
+
+1. el canal por donde viajan los `MEETING_UPDATE` (SW -> suscriptores),
+2. el keepalive que mantiene al SW despierto (Chrome 114+: long-lived messaging keeps SW alive),
+3. el contador de suscriptores (SW cuenta Ports abiertos; si ==0, cae a `chrome.alarms` 30s).
+
+**Maquina de estados pura** (`apps/extension/src/shared/status-sync.ts`): toda la logica de decision
+(diff, intervalo adaptativo, gestion de loops, handshakes, cleanup) vive en una funcion pura
+`{state, event} -> {newState, effects[]}`. Los effects son un ADT que el SW ejecuta. Esto permite
+TDD real con Bun en `apps/__tests__/extension/`.
+
+### Eventos y Effects
+
+Eventos (SW -> maquina): `SUBSCRIBE`, `POLL_TICK`, `POLL_RESPONSE`, `POLL_ERROR`, `DISCONNECT`,
+`HANDSHAKE_TIMEOUT`.
+
+Effects (maquina -> SW): `startLoop`, `stopLoop`, `fetchSnapshot`, `fetchMeeting`, `broadcast`,
+`disconnectPorts`, `disconnectPort`.
+
+### Intervalo adaptativo
+
+- 2s para fases transitorias (`pending`/`joining`/`waiting_admission`).
+- 5s para fases estables (`recording`/`transcribing`/`summarizing`).
+- Justificacion: reducir requests contra Supabase EU pooler en fases de cambio lento.
+
+### Request lenta
+
+- No solapamiento (guard `inFlight` en la maquina).
+- Relanzar inmediatamente tras resolucion (no esperar al proximo tick).
+- `POLL_ERROR` limpia `inFlight` para que el ciclo se recupere solo.
+
+### Estado terminal
+
+- Broadcast final garantizado a todos los Ports.
+- Luego: `stopLoop` + `disconnectPorts` + cleanup del registro.
+- Los suscriptores tratan `onDisconnect` post-terminal como "mantener el ultimo estado mostrado".
+
+### Render quirurgico (widget)
+
+- `mount()` (innerHTML, una vez) crea el DOM.
+- `patchStatus(status)` (N veces) actualiza solo color del indicador, texto del mensaje y boton de
+  accion sin destruir el nodo arrastrado.
+- `diff(prev, next)` decide si el render es `none` (no-op), `status` (patch) o `full` (mount).
+
+### Popup con dos modos
+
+- "Buscando meeting": mini-poll `CHECK_STATUS` a 2s via `sendMessage` (sin Port).
+- "Suscripto": cuando un meeting aparece, abre Port, manda `SUBSCRIBE`, elimina el mini-poll.
+
+### Fallback degradado
+
+- `chrome.alarms` a 30s (minimo de Chrome 120+) como wake-up de seguridad cuando no hay ningun Port
+  activo. No es el tick base del loop.
+

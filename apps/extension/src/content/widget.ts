@@ -1,16 +1,15 @@
 import {
   ACTIVE_STATUSES,
-  POLL_INTERVAL_MS,
   RETRYABLE_TERMINAL_STATUSES,
   STATUS_COLORS,
   STATUS_LABELS,
 } from "../shared/constants";
+import { diff, type WidgetRenderState } from "../shared/status-sync";
 import { getWidgetPosition, saveWidgetPosition } from "../shared/storage";
 import type {
-  ActiveMeetingEntry,
   MeetingProvider,
-  MeetingRecord,
   MeetingStatus,
+  PortMessage,
   RuntimeMessage,
   RuntimeResponse,
   StatusResponse,
@@ -29,16 +28,29 @@ function send(message: RuntimeMessage): Promise<RuntimeResponse> {
   return chrome.runtime.sendMessage(message);
 }
 
+/** Minimal Chrome runtime.Port shape for the subscription channel. */
+interface WidgetPort {
+  onMessage: { addListener: (cb: (msg: PortMessage) => void) => void };
+  onDisconnect: { addListener: (cb: () => void) => void };
+  postMessage: (msg: PortMessage) => void;
+  disconnect: () => void;
+}
+
+/** Port channel name — must match the service worker's STATUS_PORT_NAME. */
+const STATUS_PORT_NAME = "squaads-status";
+
+/** Reconnection backoff (ms): 0 (immediate), 1s, 2s, 4s (capped). */
+export function reconnectBackoff(attempts: number): number {
+  if (attempts <= 0) return 0;
+  return Math.min(1000 * 2 ** (attempts - 1), 4000);
+}
+
 export class MeetingWidget {
   private readonly host: HTMLDivElement;
   private readonly meetingUrl: string;
   private readonly provider: MeetingProvider;
   private state: WidgetState = { type: "checking" };
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private currentPolledMeetingId: string | null = null;
-  private pollRequestInFlight = false;
   private statusRequestInFlight = false;
-  private lastPassiveSyncAt = 0;
   private collapsed = false;
   private destroyed = false;
   private dragging = false;
@@ -49,7 +61,11 @@ export class MeetingWidget {
   private dragOffsetY = 0;
   private readonly boundPointerMove: (event: PointerEvent) => void;
   private readonly boundPointerUp: () => void;
-  private readonly runtimeListener: Parameters<typeof chrome.runtime.onMessage.addListener>[0];
+  private port: WidgetPort | null = null;
+  private subscribedMeetingId: string | null = null;
+  private expectedDisconnect = false;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(meetingUrl: string, provider: MeetingProvider) {
     this.meetingUrl = meetingUrl;
@@ -61,12 +77,7 @@ export class MeetingWidget {
     document.body.appendChild(this.host);
     this.boundPointerMove = (event) => this.onPointerMove(event);
     this.boundPointerUp = () => this.onPointerUp();
-    this.runtimeListener = (message: RuntimeMessage) => {
-      if (message.type !== "MEETING_UPDATE") return;
-      if (message.meetingUrl !== this.meetingUrl) return;
-      this.applyMeetingUpdate(message.entry);
-    };
-    chrome.runtime.onMessage.addListener(this.runtimeListener);
+    this.openPort();
     this.host.addEventListener("mouseenter", () => {
       this.hovered = true;
       this.syncVisualState();
@@ -77,33 +88,83 @@ export class MeetingWidget {
     });
     void this.restorePosition();
     this.scheduleIdleVisuals();
-    this.render();
+    this.mount();
+  }
+
+  /** Opens the long-lived Port to the SW (subscription + keepalive). */
+  private openPort() {
+    this.port = chrome.runtime.connect({ name: STATUS_PORT_NAME }) as WidgetPort;
+    this.port.onMessage.addListener((msg: PortMessage) => {
+      if (msg.type !== "MEETING_UPDATE") return;
+      if (msg.meetingId !== this.subscribedMeetingId) return;
+      this.applyPortUpdate(msg.status);
+    });
+    // HELLO clears the SW handshake timeout immediately — before SUBSCRIBE
+    // (which may arrive late, after checkStatus() resolves).
+    this.port.postMessage({ type: "HELLO" });
+    // Expected disconnect (destroy/terminal): keep the last status shown.
+    // Unexpected disconnect (SW death, handshake timeout, Chrome kill):
+    // reset subscription state and attempt reconnection with backoff.
+    this.port.onDisconnect.addListener(() => {
+      this.port = null;
+      if (this.expectedDisconnect) return;
+      this.subscribedMeetingId = null;
+      this.reopenPort();
+    });
+  }
+
+  /**
+   * Reopens the Port after an unexpected disconnect. Sends HELLO, then if the
+   * widget is still showing an active meeting, re-subscribes to it. Uses
+   * exponential backoff (0, 1s, 2s, 4s cap) across successive failures.
+   */
+  private reopenPort() {
+    if (this.isInactive()) return;
+    const delay = reconnectBackoff(this.reconnectAttempts);
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = setTimeout(() => {
+      if (this.isInactive()) return;
+      this.openPort();
+      if (this.state.type === "active" && this.state.meetingId) {
+        this.subscribe(this.state.meetingId);
+      }
+    }, delay);
+  }
+
+  /** Sends SUBSCRIBE for a meeting — the only entry point to the SW loop. */
+  private subscribe(meetingId: string) {
+    if (this.isInactive()) return;
+    if (this.subscribedMeetingId === meetingId && this.port) return;
+    this.subscribedMeetingId = meetingId;
+    this.reconnectAttempts = 0;
+    this.port?.postMessage({ type: "SUBSCRIBE", meetingId, provider: this.provider });
   }
 
   async bootstrap(): Promise<void> {
     await this.checkStatus();
   }
 
+  /**
+   * Called by the content script on URL re-detection. The SW pushes updates via
+   * Port, so this is now a no-op — kept for content-script compatibility.
+   */
   sync() {
-    if (this.isInactive()) return;
-    if (this.statusRequestInFlight || this.pollRequestInFlight) return;
-    if (this.state.type === "inviting") return;
-    if (this.state.type === "active" && ACTIVE_STATUSES.includes(this.state.status)) return;
-
-    const now = Date.now();
-    if (now - this.lastPassiveSyncAt < POLL_INTERVAL_MS) return;
-    this.lastPassiveSyncAt = now;
-    void this.checkStatus(true);
+    // No-op — the Single Poller (SW) pushes status updates via Port.
   }
 
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.stopPolling();
+    this.expectedDisconnect = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.port?.disconnect();
+    this.port = null;
     this.clearIdleTimer();
     window.removeEventListener("pointermove", this.boundPointerMove);
     window.removeEventListener("pointerup", this.boundPointerUp);
-    chrome.runtime.onMessage.removeListener(this.runtimeListener);
     this.host.remove();
     void send({ type: "SET_BADGE", state: "clear" });
   }
@@ -120,36 +181,75 @@ export class MeetingWidget {
 
   private setState(next: WidgetState) {
     if (this.isInactive()) return;
+    const prevRender = this.toRenderState(this.state);
+    const nextRender = this.toRenderState(next);
     this.state = next;
     this.syncBadge();
-    this.render();
+    const patch = diff(prevRender, nextRender);
+    switch (patch.attribute) {
+      case "none":
+        return;
+      case "full":
+        this.mount();
+        return;
+      case "status":
+        this.patchStatus(patch.value);
+    }
+  }
+
+  private toRenderState(state: WidgetState): WidgetRenderState {
+    if (state.type === "active") {
+      return { type: "active", status: state.status };
+    }
+    return { type: state.type, status: null };
+  }
+
+  /**
+   * Surgical status patch — updates indicator color, message text and action
+   * button WITHOUT rebuilding the DOM. Preserves the dragged node and any
+   * in-progress pointer interaction.
+   */
+  private patchStatus(status: MeetingStatus) {
+    if (this.isInactive()) return;
+    const color = STATUS_COLORS[status];
+    const label = STATUS_LABELS[status];
+
+    this.host.querySelectorAll<HTMLElement>("[data-squaads-indicator]").forEach((el) => {
+      el.style.background = color;
+      el.style.boxShadow = `0 0 16px ${color}`;
+    });
+
+    this.host.querySelectorAll<HTMLElement>("[data-squaads-message]").forEach((el) => {
+      el.textContent = label;
+    });
+
+    const action = this.host.querySelector<HTMLElement>("#squaads-primary-btn");
+    if (action) {
+      action.textContent = label;
+      action.style.background = color;
+    }
   }
 
   private isInactive() {
     return this.destroyed;
   }
 
-  private applyMeetingUpdate(entry: ActiveMeetingEntry | null) {
+  /**
+   * Handles a status update received via the Port (SW broadcast).
+   * - Active/completed: update the active state with the new status.
+   * - Retryable terminal (admission_timeout/rejected/error): show error state.
+   */
+  private applyPortUpdate(status: MeetingStatus) {
     if (this.isInactive()) return;
-
-    if (!entry) {
-      this.stopPolling();
-      this.setState({ type: "idle" });
+    if (RETRYABLE_TERMINAL_STATUSES.includes(status)) {
+      this.setState({ type: "error", message: STATUS_LABELS[status] });
       return;
     }
-
     this.setState({
       type: "active",
-      meetingId: entry.meetingId,
-      status: entry.status,
+      meetingId: this.subscribedMeetingId ?? "",
+      status,
     });
-
-    if (ACTIVE_STATUSES.includes(entry.status)) {
-      this.startPolling(entry.meetingId);
-      return;
-    }
-
-    this.stopPolling();
   }
 
   private syncBadge() {
@@ -268,7 +368,7 @@ export class MeetingWidget {
     this.scheduleIdleVisuals();
   }
 
-  private render() {
+  private mount() {
     const wrap =
       "display:flex;gap:10px;align-items:center;padding:12px 13px;border-radius:22px;min-width:280px;max-width:390px;position:relative;overflow:hidden;backdrop-filter:blur(18px);";
     const card =
@@ -325,8 +425,8 @@ export class MeetingWidget {
     if (this.collapsed) {
       this.host.innerHTML = `
         <button id="squaads-expand-btn" style="display:flex;gap:10px;align-items:center;padding:11px 14px;border-radius:999px;border:1px solid rgba(148,163,184,.18);background:linear-gradient(145deg, rgba(8,15,29,.94), rgba(12,25,44,.88));color:#f8fafc;box-shadow:0 24px 60px rgba(2,8,23,.45);cursor:pointer;max-width:280px;backdrop-filter:blur(18px);">
-          <span style="width:10px;height:10px;border-radius:999px;background:${indicator};display:inline-block;flex:0 0 auto;box-shadow:0 0 16px ${indicator};"></span>
-          <span style="font-size:12px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700;">${message}</span>
+          <span data-squaads-indicator style="width:10px;height:10px;border-radius:999px;background:${indicator};display:inline-block;flex:0 0 auto;box-shadow:0 0 16px ${indicator};"></span>
+          <span data-squaads-message style="font-size:12px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700;">${message}</span>
         </button>
       `;
 
@@ -342,10 +442,10 @@ export class MeetingWidget {
       <div style="${wrap}${card}">
         <div style="position:absolute;inset:0;background:radial-gradient(circle at top left, rgba(103,232,249,.10), transparent 34%),radial-gradient(circle at bottom right, rgba(99,102,241,.12), transparent 30%);pointer-events:none;"></div>
         <button id="squaads-drag-handle" style="border:0;background:transparent;color:#94a3b8;cursor:grab;padding:0 2px;font-size:14px;line-height:1;position:relative;z-index:1">⋮⋮</button>
-        <span style="width:10px;height:10px;border-radius:999px;background:${indicator};display:inline-block;flex:0 0 auto;box-shadow:0 0 18px ${indicator};position:relative;z-index:1"></span>
+        <span data-squaads-indicator style="width:10px;height:10px;border-radius:999px;background:${indicator};display:inline-block;flex:0 0 auto;box-shadow:0 0 18px ${indicator};position:relative;z-index:1"></span>
         <div style="${content}">
           <span style="${metaLabel}">${providerLabel}</span>
-          <span style="${statusLabel}">${message}</span>
+          <span data-squaads-message style="${statusLabel}">${message}</span>
         </div>
         <button id="squaads-primary-btn" style="${button}${actionStyle}" ${actionDisabled ? "disabled" : ""}>${actionLabel}</button>
         <button id="squaads-dismiss-btn" style="${dismissButton}">x</button>
@@ -394,7 +494,6 @@ export class MeetingWidget {
     if (this.isInactive()) return;
 
     if (!res.ok) {
-      this.stopPolling();
       const error = (res as { ok: false; error: string }).error;
       if (error.toLowerCase().includes("not configured")) {
         this.setState({ type: "not_configured" });
@@ -406,7 +505,6 @@ export class MeetingWidget {
 
     const status = (res as { ok: true; data: StatusResponse }).data;
     if (!status.active || !status.meeting) {
-      this.stopPolling();
       this.setState({ type: "idle" });
       return;
     }
@@ -418,7 +516,7 @@ export class MeetingWidget {
     });
 
     if (ACTIVE_STATUSES.includes(status.meeting.status)) {
-      this.startPolling(status.meeting.id);
+      this.subscribe(status.meeting.id);
     }
   }
 
@@ -441,72 +539,20 @@ export class MeetingWidget {
 
     const data = (res as { ok: true; data: { meetingId: string } }).data;
     this.setState({ type: "active", meetingId: data.meetingId, status: "pending" });
-    this.startPolling(data.meetingId);
-  }
-
-  private startPolling(meetingId: string) {
-    if (this.isInactive()) return;
-    if (this.pollTimer && this.currentPolledMeetingId === meetingId) return;
-    this.stopPolling();
-    this.currentPolledMeetingId = meetingId;
-    this.pollTimer = setInterval(async () => {
-      if (this.isInactive() || this.pollRequestInFlight) return;
-      this.pollRequestInFlight = true;
-      let response: RuntimeResponse;
-
-      try {
-        response = await send({ type: "POLL_MEETING", meetingId });
-      } finally {
-        this.pollRequestInFlight = false;
-      }
-
-      if (this.isInactive()) return;
-
-      if (!response.ok) {
-        this.stopPolling();
-        await this.checkStatus(true);
-        return;
-      }
-
-      const meeting = (response as { ok: true; data: MeetingRecord }).data;
-
-      if (ACTIVE_STATUSES.includes(meeting.status)) {
-        this.setState({ type: "active", meetingId, status: meeting.status });
-        return;
-      }
-
-      if (meeting.status === "completed") {
-        this.setState({ type: "active", meetingId, status: "completed" });
-        this.stopPolling();
-        return;
-      }
-
-      if (RETRYABLE_TERMINAL_STATUSES.includes(meeting.status)) {
-        this.setState({ type: "error", message: STATUS_LABELS[meeting.status] });
-        this.stopPolling();
-      }
-    }, POLL_INTERVAL_MS);
+    this.subscribe(data.meetingId);
   }
 
   private collapse() {
     if (this.isInactive()) return;
     this.collapsed = true;
-    this.render();
+    this.mount();
     this.scheduleIdleVisuals();
   }
 
   private expand() {
     if (this.isInactive()) return;
     this.collapsed = false;
-    this.render();
+    this.mount();
     this.bringToFront();
-  }
-
-  private stopPolling() {
-    this.currentPolledMeetingId = null;
-    this.pollRequestInFlight = false;
-    if (!this.pollTimer) return;
-    clearInterval(this.pollTimer);
-    this.pollTimer = null;
   }
 }

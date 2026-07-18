@@ -34,3 +34,26 @@ Superficie servida sin ningún esquema de auth, a propósito: `/share/[token]` (
 externos) y `/api/v1/public/shares/*`. No confundir con rutas que simplemente no chequean auth por
 omisión (bug) — esas son un gap, no una `Public Route` intencional.
 _Avoid_: unprotected route (ambiguo — no distingue "público a propósito" de "gap sin querer").
+
+# Meeting Status
+
+El ciclo de vida de un bot de reunión y quién dice la verdad sobre él. La extensión lo muestra en dos
+superficies (widget flotante dentro del Meet, popup) que deben coincidir siempre.
+
+## Language
+
+**Meeting Status**:
+El estado canónico del ciclo de vida de un bot de reunión (`pending`, `joining`, `waiting_admission`,
+`recording`, `transcribing`, `summarizing`, `completed`, o terminal de fallo). El backend (Supabase vía
+web API) es la única fuente de verdad; cualquier valor retenido en el cliente es una caché cálida, no
+dato canónico.
+_Avoid_: meeting state (genérico), status value.
+
+**Single Poller**:
+El único componente autorizado a hacer `GET` de `Meeting Status` al backend por meeting activo. Las demás
+superficies (widget, popup) se suscriben a él y nunca hacen fetch propio. Su memoria en MV3 no es
+persistente: al despertar, la caché está fría y debe re-fetchear antes de responder a un suscriptor tardío.
+_Avoid_: polling loop (describe el mecanismo, no el rol), status source.
+
+_Avoid_ (frase): **"fuente de estado única"** — ambigua: confunde el dueño del dato (el backend) con el
+deduplicador de fetch (el Single Poller). Usar "Single Poller" para el rol y "backend" para el dueño.
