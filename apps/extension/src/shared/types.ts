@@ -89,3 +89,15 @@ export type RuntimeResponse =
   | { ok: true; data: { collapsed: boolean } }
   | { ok: true }
   | { ok: false; error: string };
+
+/**
+ * Messages sent over a long-lived Port (SW <-> widget/popup subscription).
+ *
+ * The Port is simultaneously the subscription channel, the SW keepalive, and
+ * the subscriber counter. `SUBSCRIBE` is the handshake; `MEETING_UPDATE` is
+ * the broadcast the SW sends to all subscribers of a meeting.
+ */
+export type PortMessage =
+  | { type: "HELLO" }
+  | { type: "SUBSCRIBE"; meetingId: string; provider: MeetingProvider }
+  | { type: "MEETING_UPDATE"; meetingId: string; status: MeetingStatus };

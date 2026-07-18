@@ -35,6 +35,14 @@ _Fases completadas, en orden de implementación (heredadas del tracking previo).
     operativo en [`../../docs/deployment.md`](../../docs/deployment.md). Detalle en
     [`features/006-worker-railway-dev/`](../features/006-worker-railway-dev/spec.md). **Pendiente
     heredado**: CI/CD del worker en Railway + retiro de workflows del VPS (rama `chore/railway-cicd`).
+12. **007 · Sincronización de estados de la extensión** — **hecho ✅ (archivado 2026-07-18)**. Single Poller
+    + Port-as-keepalive en el service worker; `status-sync.ts` como máquina de estados pura con effects ADT
+    (TDD: 25 tests nuevos, 205 total en verde, 0 regresiones); render quirúrgico `mount()` + `patch(diff)`
+    que preserva el drag del widget; intervalo adaptativo 2s (transitorio) / 5s (estable); broadcast final
+    garantizado en estados terminales (broadcast → stopLoop → disconnectPorts). 7/7 criterios de aceptación
+    cumplidos. Pendiente declarado: validación manual en Meet real (excepción per `AGENTS.md` — requiere
+    Google Meet en vivo; se realiza post-merge). Detalle en
+    [`features/007-extension-status-sync/`](../features/007-extension-status-sync/spec.md).
 
 ## Siguiente 🔜
 
@@ -43,10 +51,6 @@ _Lo próximo a abordar. Una sola feature "en curso" a la vez._
 10. **001 · Rollout interno de la extensión** — cerrar los pendientes vivos de Fase 8: cargar el ZIP interno
     real en entornos compartidos, validar el flujo end-to-end fuera de local y sustituir hosts locales por
     dominio real. → [`features/001-extension-rollout/`](../features/001-extension-rollout/spec.md)
-11. **007 · Sincronización de estados de la extensión** — **pendiente (abierta, sin iniciar)**. Estados con
-    latencia alta, popup desincronizado del widget y re-render con parpadeo (hallazgos del test manual del
-    16/07/2026; causa raíz investigada y documentada en la spec). En espera: prioridad actual es el deploy
-    de la web en Vercel. → [`features/007-extension-status-sync/`](../features/007-extension-status-sync/spec.md)
 
 ## Seguridad — pendientes conocidos ⚠️
 

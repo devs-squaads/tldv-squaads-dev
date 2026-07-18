@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, DEFAULT_SETTINGS, STATUS_LABELS } from "../shared/constants";
+import { ACTIVE_STATUSES, DEFAULT_SETTINGS, SEARCH_POLL_INTERVAL_MS, STATUS_LABELS } from "../shared/constants";
 import { detectMeetingProvider, normalizeMeetingUrl } from "../shared/meeting-url";
 import { logInfo, logWarn } from "../shared/logger";
 import { getConnectableSiteContext, normalizeOrigin } from "../shared/origin";
@@ -8,11 +8,23 @@ import type {
   ExtensionSettings,
   InviteResponse,
   MeetingProvider,
-  MeetingRecord,
+  MeetingStatus,
+  PortMessage,
   RuntimeMessage,
   RuntimeResponse,
   StatusResponse,
 } from "../shared/types";
+
+/** Minimal Chrome runtime.Port shape for the subscription channel. */
+interface PopupPort {
+  onMessage: { addListener: (cb: (msg: PortMessage) => void) => void };
+  onDisconnect: { addListener: (cb: () => void) => void };
+  postMessage: (msg: PortMessage) => void;
+  disconnect: () => void;
+}
+
+/** Port channel name — must match the service worker's STATUS_PORT_NAME. */
+const STATUS_PORT_NAME = "squaads-status";
 
 type ConnectionUiState =
   | "not-connected"
@@ -61,9 +73,9 @@ let currentTabId: number | null = null;
 let currentConnectOrigin = "";
 let currentConnectReason = "Open the Squaads dashboard tab before connecting.";
 let currentConnectEligible = false;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let currentPolledMeetingId: string | null = null;
-let pollRequestInFlight = false;
+let searchTimer: ReturnType<typeof setInterval> | null = null;
+let statusPort: PopupPort | null = null;
+let subscribedMeetingId: string | null = null;
 let cachedSettings: ExtensionSettings = { ...DEFAULT_SETTINGS };
 let currentTokenPreview: ParsedLinkTokenPreview | null = null;
 let transientConnectionState: ConnectionUiState | null = null;
@@ -259,7 +271,8 @@ async function refreshWidgetState() {
 }
 
 function resetMeetingControls() {
-  stopPolling();
+  unsubscribeFromMeeting();
+  stopSearching();
   setInviteVisibility(false);
   setInviteAvailability(false);
   setRestoreWidgetVisibility(false);
@@ -270,10 +283,11 @@ function applyMeetingEntry(entry: ActiveMeetingEntry | null) {
   if (!entry) {
     currentMeetingId = null;
     runtimeStatus.textContent = "Status: idle";
-    stopPolling();
+    unsubscribeFromMeeting();
     setInviteVisibility(true);
     setInviteAvailability(true);
     syncBadge("clear");
+    startSearching();
     void refreshWidgetState();
     return;
   }
@@ -292,12 +306,12 @@ function applyMeetingEntry(entry: ActiveMeetingEntry | null) {
   if (ACTIVE_STATUSES.includes(entry.status)) {
     setInviteVisibility(false);
     setInviteAvailability(false);
-    startPolling();
+    subscribeToMeeting(entry.meetingId);
     void refreshWidgetState();
     return;
   }
 
-  stopPolling();
+  unsubscribeFromMeeting();
   setInviteVisibility(true);
   setInviteAvailability(true);
   void refreshWidgetState();
@@ -495,7 +509,7 @@ async function inviteFromPopup() {
   feedback.textContent = `Bot queued successfully for ${data.provider}.`;
   currentMeetingId = data.meetingId;
   runtimeStatus.textContent = `Status: ${STATUS_LABELS.pending}`;
-  startPolling();
+  subscribeToMeeting(data.meetingId);
   setInviteAvailability(false);
   await refreshWidgetState();
 }
@@ -521,7 +535,7 @@ async function refreshRuntimeStatus() {
 
   if (!response.ok) {
     const error = (response as { ok: false; error: string }).error;
-    stopPolling();
+    unsubscribeFromMeeting();
     currentMeetingId = null;
     syncBadge("clear");
     runtimeStatus.textContent = error;
@@ -544,52 +558,66 @@ async function refreshRuntimeStatus() {
   });
 }
 
-function startPolling() {
-  if (!currentMeetingId) return;
-  if (pollTimer && currentPolledMeetingId === currentMeetingId) return;
-  stopPolling();
-  currentPolledMeetingId = currentMeetingId;
-  pollTimer = setInterval(async () => {
-    if (!currentMeetingId || pollRequestInFlight) return;
-    pollRequestInFlight = true;
-    let response: RuntimeResponse;
+// ---------------------------------------------------------------------------
+// Searching mode — mini-poll CHECK_STATUS at 2s via sendMessage (no Port)
+// ---------------------------------------------------------------------------
 
-    try {
-      response = await send({ type: "POLL_MEETING", meetingId: currentMeetingId });
-    } finally {
-      pollRequestInFlight = false;
-    }
-
-    if (!response.ok) {
-      stopPolling();
-      await refreshRuntimeStatus();
-      return;
-    }
-
-    const meeting = (response as { ok: true; data: MeetingRecord }).data;
-    if (!currentMeetingUrl || !currentProvider) return;
-    applyMeetingEntry({
-      meetingId: meeting.id,
-      meetingUrl: meeting.url || currentMeetingUrl,
-      provider: currentProvider,
-      status: meeting.status,
-    });
-  }, 5000);
+function startSearching() {
+  if (searchTimer) return;
+  searchTimer = setInterval(() => {
+    void refreshRuntimeStatus();
+  }, SEARCH_POLL_INTERVAL_MS);
 }
 
-function stopPolling() {
-  currentPolledMeetingId = null;
-  pollRequestInFlight = false;
-  if (!pollTimer) return;
-  clearInterval(pollTimer);
-  pollTimer = null;
+function stopSearching() {
+  if (!searchTimer) return;
+  clearInterval(searchTimer);
+  searchTimer = null;
 }
 
-chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
-  if (message.type !== "MEETING_UPDATE") return;
-  if (!currentMeetingUrl || message.meetingUrl !== currentMeetingUrl) return;
-  applyMeetingEntry(message.entry);
-});
+// ---------------------------------------------------------------------------
+// Subscribed mode — Port + SUBSCRIBE + MEETING_UPDATE broadcasts
+// ---------------------------------------------------------------------------
+
+function subscribeToMeeting(meetingId: string) {
+  if (subscribedMeetingId === meetingId && statusPort) return;
+  unsubscribeFromMeeting();
+  stopSearching();
+
+  subscribedMeetingId = meetingId;
+  statusPort = chrome.runtime.connect({ name: STATUS_PORT_NAME }) as PopupPort;
+
+  statusPort.onMessage.addListener((msg: PortMessage) => {
+    if (msg.type !== "MEETING_UPDATE") return;
+    if (msg.meetingId !== subscribedMeetingId) return;
+    applyPortUpdate(msg.status);
+  });
+
+  // onDisconnect post-terminal: keep the last status shown (no error).
+  statusPort.onDisconnect.addListener(() => {
+    statusPort = null;
+  });
+
+  statusPort.postMessage({ type: "SUBSCRIBE", meetingId, provider: currentProvider! });
+}
+
+function unsubscribeFromMeeting() {
+  subscribedMeetingId = null;
+  if (!statusPort) return;
+  statusPort.disconnect();
+  statusPort = null;
+}
+
+/** Updates the popup UI from a Port broadcast (SW -> popup). */
+function applyPortUpdate(status: MeetingStatus) {
+  if (!currentMeetingUrl || !currentProvider) return;
+  applyMeetingEntry({
+    meetingId: subscribedMeetingId ?? currentMeetingId ?? "",
+    meetingUrl: currentMeetingUrl,
+    provider: currentProvider,
+    status,
+  });
+}
 
 chrome.tabs.onActivated.addListener(() => {
   void inspectCurrentTab();
