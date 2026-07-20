@@ -9,11 +9,11 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR1 → {PR2, PR3, PR4, PR7 parallel} → {PR5 → PR6} |
 | Delivery strategy | ask-on-risk (default, none supplied) |
-| Chain strategy | pending — user decision needed |
+| Chain strategy | feature-branch-chain (resolved — confirmed by branch structure: `feat/009-02-owner-capture` created off `feat/009-01-schema`, off tracker `feat/009-meeting-ownership-sharing`) |
 
-Decision needed before apply: Yes
+Decision needed before apply: No — resolved as feature-branch-chain
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Suggested Work Units
