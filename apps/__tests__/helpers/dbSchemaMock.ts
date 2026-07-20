@@ -16,6 +16,10 @@ export function mockDrizzleOrmModule() {
     eq: (...args: [unknown, unknown]) => ({ __op: "eq", value: args[1] }),
     asc: () => ({ __op: "asc" }),
     desc: () => ({ __op: "desc" }),
+    and: (...args: unknown[]) => ({ __op: "and", args }),
+    or: (...args: unknown[]) => ({ __op: "or", args }),
+    isNull: (...args: unknown[]) => ({ __op: "isNull", args }),
+    gt: (...args: unknown[]) => ({ __op: "gt", args }),
   };
 }
 
@@ -25,5 +29,6 @@ export function mockDbSchemaModule() {
     chatMessages: {},
     settings: {},
     authorizedAccounts: {},
+    meetingAccessGrants: {},
   };
 }
