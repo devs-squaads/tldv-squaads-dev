@@ -44,14 +44,34 @@ async function buildInternalZip() {
   await mkdir(internalDownloadsDir, { recursive: true });
   await rm(internalZipPath, { force: true });
 
-  const proc = Bun.spawn({
-    cmd: ["zip", "-r", internalZipPath, "."],
-    cwd: distDir,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
+  const isWindows = process.platform === "win32";
+  let exitCode: number;
 
-  const exitCode = await proc.exited;
+  if (isWindows) {
+    // PowerShell Compress-Archive is available on all modern Windows.
+    // Single quotes protect paths with spaces; wildcard includes dist contents at ZIP root.
+    const proc = Bun.spawn({
+      cmd: [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        `Compress-Archive -Path '${join(distDir, "*")}' -DestinationPath '${internalZipPath}' -Force`,
+      ],
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    exitCode = await proc.exited;
+  } else {
+    // Linux/macOS: use the zip utility (also used by CI).
+    const proc = Bun.spawn({
+      cmd: ["zip", "-r", internalZipPath, "."],
+      cwd: distDir,
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    exitCode = await proc.exited;
+  }
+
   if (exitCode !== 0) {
     throw new Error(`Internal extension ZIP build failed with exit code ${exitCode}`);
   }
