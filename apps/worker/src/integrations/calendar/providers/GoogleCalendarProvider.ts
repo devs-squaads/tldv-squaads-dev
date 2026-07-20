@@ -126,6 +126,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
       timeMax: Date;
     },
     calendarId: string,
+    ownerUserId?: string,
   ): Promise<CalendarMeetingEvent[]> {
     const calendar = google.calendar({ version: "v3", auth });
     const organizerSet = new Set(params.organizerEmails.map((email) => email.toLowerCase()));
@@ -152,6 +153,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
       const meetingUrl = extractMeetingUrl(event);
       if (!meetingUrl) continue;
 
+      const participantEmails = (event.attendees || [])
+        .map((attendee) => normalizeEmail(attendee.email))
+        .filter((email): email is string => Boolean(email));
+
       mapped.push({
         provider: "google-calendar",
         eventId,
@@ -160,6 +165,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
         meetingUrl,
         startsAt: parseEventDate(event.start?.dateTime || event.start?.date),
         endsAt: parseEventDate(event.end?.dateTime || event.end?.date),
+        ownerUserId,
+        participantEmails,
       });
     }
 
@@ -178,7 +185,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
       if (!user.googleAccessToken) continue;
       try {
         const auth = await GoogleCalendarProvider.getOAuth2ForUser(user);
-        meetings.push(...(await GoogleCalendarProvider.fetchEvents(auth, params, "primary")));
+        meetings.push(...(await GoogleCalendarProvider.fetchEvents(auth, params, "primary", user.id)));
       } catch (error) {
         console.error(`[GoogleCalendarProvider] OAuth polling failed for ${user.email}:`, error);
       }
