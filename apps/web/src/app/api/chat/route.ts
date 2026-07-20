@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     persistedHistory,
     clientMessages: messages,
   });
-  const userContext = await buildUserContext({ role: session.user.role });
+  const userContext = await buildUserContext({ userId: session.user.id, role: session.user.role });
   const promptAssembly = assembleChatSystemPrompt({
     messages: trustedConversation.messages,
     userContext,

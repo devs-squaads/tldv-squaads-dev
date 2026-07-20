@@ -48,8 +48,8 @@ PR2/PR4 sit near the 400-line edge; split further at apply time if actual diff o
 
 ## Phase 3: Ownership-Scoped Visibility
 
-- [ ] 3.1 RED+GREEN: `WebMeetingRepository.ts` — owner-or-live-grant WHERE, joined to `authorized_accounts.isActive`, no role bypass — `apps/__tests__/web/repositories/web-meeting-repository.test.ts`.
-- [ ] 3.2 Thread `session.user.id` into meeting list/detail callers under `apps/web/src/app/(main)/`.
+- [x] 3.1 RED+GREEN: `WebMeetingRepository.ts` — owner-or-live-grant WHERE, joined to `authorized_accounts.isActive`, no role bypass — `apps/__tests__/web/repositories/web-meeting-repository.test.ts`.
+- [x] 3.2 Thread `session.user.id` into meeting list/detail callers under `apps/web/src/app/(main)/`.
 
 ## Phase 4: Access Grants
 

@@ -5,6 +5,8 @@
  * repositorios existentes directamente. No hay lógica nueva de negocio aquí.
  */
 
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import { WebMeetingRepository, type MeetingFilters } from "@/repositories/WebMeetingRepository";
 import { WebSettingsRepository } from "@/repositories/WebSettingsRepository";
 import { MeetingShareRepository } from "@/repositories/MeetingShareRepository";
@@ -116,8 +118,11 @@ export const searchMeetingsTool: ToolDefinition<SearchMeetingsArgs, MeetingSumma
     },
   },
   async execute({ status, from_date, to_date, query, limit = 10 }) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return [];
+
     const filters: MeetingFilters = { status, from_date, to_date, query, limit };
-    const results = await WebMeetingRepository.listFiltered(filters);
+    const results = await WebMeetingRepository.listFiltered(session.user.id, filters);
     return results.map(toMeetingSummary);
   },
 };
