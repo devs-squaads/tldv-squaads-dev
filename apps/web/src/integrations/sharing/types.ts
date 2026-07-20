@@ -1,4 +1,4 @@
-export type ShareType = "public" | "restricted_email";
+export type ShareType = "restricted_email";
 export type ShareStatus = "active" | "expired" | "revoked";
 
 export interface CreateShareInput {

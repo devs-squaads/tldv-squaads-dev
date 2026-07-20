@@ -10,6 +10,7 @@ import { authOptions } from "@/auth";
 import { WebMeetingRepository, type MeetingFilters } from "@/repositories/WebMeetingRepository";
 import { WebSettingsRepository } from "@/repositories/WebSettingsRepository";
 import { MeetingShareRepository } from "@/repositories/MeetingShareRepository";
+import { MeetingShareService } from "@/services/meetingShareService";
 import { ChatProviderFactory } from "@/integrations/chat/ChatProviderFactory";
 import { resolveChatToolPolicy } from "@/modules/chat/policy/toolPolicy";
 import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
@@ -399,7 +400,7 @@ export interface ManageShareListArgs {
 export interface ManageShareCreateArgs {
   action: "create";
   meeting_id: string;
-  share_type: "public" | "restricted_email";
+  share_type: "restricted_email";
   recipient_email?: string;
   ttl_minutes?: number;
   no_expiry?: boolean;
@@ -421,9 +422,10 @@ export const manageMeetingShareTool: ToolDefinition<ManageMeetingShareArgs, Mana
     "Gestiona los links de compartir de una reunión. " +
     "Acciones disponibles: " +
     "'list' — lista todos los shares activos de una reunión; " +
-    "'create' — crea un link público o restringido a un email; " +
+    "'create' — crea un link restringido a un email; " +
     "'revoke' — revoca un share por su ID. " +
-    "Para 'create' con restricted_email, el recipient_email es obligatorio.",
+    "El recipient_email es obligatorio para 'create'. " +
+    "Solo el dueño de la reunión puede crear o revocar shares.",
   parameters: {
     type: "object",
     properties: {
@@ -438,12 +440,12 @@ export const manageMeetingShareTool: ToolDefinition<ManageMeetingShareArgs, Mana
       },
       share_type: {
         type: "string",
-        enum: ["public", "restricted_email"],
-        description: "Tipo de share (requerido para 'create')",
+        enum: ["restricted_email"],
+        description: "Tipo de share (requerido para 'create'; único valor soportado: restricted_email)",
       },
       recipient_email: {
         type: "string",
-        description: "Email del destinatario (requerido para create con share_type='restricted_email')",
+        description: "Email del destinatario (requerido para 'create')",
       },
       ttl_minutes: {
         type: "number",
@@ -462,10 +464,10 @@ export const manageMeetingShareTool: ToolDefinition<ManageMeetingShareArgs, Mana
   },
   mutates: true,
   async execute(args) {
-    const now = new Date();
-
-    // LIST
+    // LIST — read-only, no ownership check yet (matches search_meetings/get_meeting_detail
+    // on this branch; ownership-scoped reads land in the separate Phase 3 PR).
     if (args.action === "list") {
+      const now = new Date();
       const shares = await MeetingShareRepository.listByMeetingId(args.meeting_id);
       const mapped = shares.map((s) => ({
         id: s.id,
@@ -484,106 +486,69 @@ export const manageMeetingShareTool: ToolDefinition<ManageMeetingShareArgs, Mana
       };
     }
 
-    // CREATE
-    if (args.action === "create") {
-      if (args.share_type === "restricted_email" && !args.recipient_email) {
-        return {
-          action: "create",
-          success: false,
-          message: "Para un share restringido por email, recipient_email es obligatorio.",
-        };
-      }
-
-      // Verificar que la reunión existe y está completada
-      const meeting = await MeetingRepository.findById(args.meeting_id);
-      if (!meeting) {
-        return {
-          action: "create",
-          success: false,
-          message: `No se encontró la reunión con ID: ${args.meeting_id}`,
-        };
-      }
-      if (meeting.status !== "completed") {
-        return {
-          action: "create",
-          success: false,
-          message: `Solo se pueden compartir reuniones completadas. Estado actual: ${getMeetingStatusLabel(meeting.status as MeetingStatus)}`,
-        };
-      }
-
-      const token = crypto.randomUUID();
-      // En producción, el tokenHash debería ser un hash del token
-      // Para el MVP, usamos el token directamente (el route real lo hashea)
-      const tokenHash = token;
-
-      const expiresAt = args.no_expiry
-        ? null
-        : args.ttl_minutes
-          ? new Date(now.getTime() + args.ttl_minutes * 60 * 1000)
-          : new Date(now.getTime() + 24 * 60 * 60 * 1000); // default 24hs
-
-      const shareId = crypto.randomUUID();
-
-      await MeetingShareRepository.create({
-        id: shareId,
-        meetingId: args.meeting_id,
-        shareType: args.share_type,
-        tokenHash,
-        recipientEmail: args.recipient_email ?? null,
-        recipientEmailNormalized: args.recipient_email?.toLowerCase() ?? null,
-        expiresAt,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-      const shareUrl = `${baseUrl}/share/${token}`;
-
+    // CREATE/REVOKE mutate share state — resolve the caller the same way
+    // enqueueMeetingTool does (no session context threaded into the tool-calling
+    // stack yet, see spec/features/009-meeting-ownership-sharing/plan.md) and
+    // route through MeetingShareService so ownership is enforced instead of
+    // calling MeetingShareRepository directly.
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
       return {
-        action: "create",
-        success: true,
-        message: `Link de compartir creado correctamente.`,
-        createdShare: {
-          id: shareId,
-          shareUrl,
-          shareType: args.share_type,
-          expiresAt: expiresAt?.toISOString() ?? null,
-        },
+        action: args.action,
+        success: false,
+        message: "No se pudo resolver el usuario autenticado para gestionar este share.",
       };
     }
 
+    // CREATE
+    if (args.action === "create") {
+      try {
+        const result = await MeetingShareService.createShare(
+          {
+            meetingId: args.meeting_id,
+            shareType: args.share_type,
+            recipientEmail: args.recipient_email,
+            ttlMinutes: args.ttl_minutes,
+            noExpiry: args.no_expiry,
+          },
+          session.user.id,
+        );
+
+        return {
+          action: "create",
+          success: true,
+          message: "Link de compartir creado correctamente.",
+          createdShare: {
+            id: result.id,
+            shareUrl: result.shareUrl,
+            shareType: result.shareType,
+            expiresAt: result.expiresAt?.toISOString() ?? null,
+          },
+        };
+      } catch (error) {
+        return {
+          action: "create",
+          success: false,
+          message: error instanceof Error ? error.message : "Error al crear el share.",
+        };
+      }
+    }
+
     // REVOKE
-    if (args.action === "revoke") {
-      const share = await MeetingShareRepository.findById(args.share_id);
-      if (!share) {
-        return {
-          action: "revoke",
-          success: false,
-          message: `No se encontró el share con ID: ${args.share_id}`,
-        };
-      }
-      if (share.revokedAt) {
-        return {
-          action: "revoke",
-          success: false,
-          message: "Este share ya estaba revocado.",
-        };
-      }
-
-      await MeetingShareRepository.revokeById(args.share_id, now);
-
+    try {
+      await MeetingShareService.revokeShare(args.share_id, session.user.id);
       return {
         action: "revoke",
         success: true,
         message: "Share revocado correctamente. El link dejará de funcionar de inmediato.",
       };
+    } catch (error) {
+      return {
+        action: "revoke",
+        success: false,
+        message: error instanceof Error ? error.message : "Error al revocar el share.",
+      };
     }
-
-    return {
-      action: "list",
-      success: false,
-      message: "Acción no reconocida.",
-    };
   },
 };
 

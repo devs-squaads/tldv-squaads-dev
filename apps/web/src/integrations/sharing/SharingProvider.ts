@@ -18,7 +18,7 @@ export interface SharingVerifyAccessInput {
 }
 
 export interface SharingProvider {
-  readonly type: "public" | "restricted_email";
+  readonly type: "restricted_email";
   resolveAccess(share: MeetingShareRecord): Promise<SharingResolveDecision>;
   requestAccess(input: SharingRequestAccessInput): Promise<void>;
   verifyAccess(input: SharingVerifyAccessInput): Promise<boolean>;
