@@ -60,8 +60,8 @@ PR2/PR4 sit near the 400-line edge; split further at apply time if actual diff o
 
 ## Phase 5: Share Authorization Retrofit
 
-- [ ] 5.1 RED+GREEN: `meetingShareService.ts` — `createShare` requires `callerId === meeting.ownerId`, drops `"public"` branch, resolve-then-fallback signed URL — `apps/__tests__/web/services/meeting-share-service.test.ts`.
-- [ ] 5.2 `app/actions/shares.ts`: `createShareAction` resolves session, passes `callerId`.
+- [x] 5.1 RED+GREEN: `meetingShareService.ts` — `createShare` requires `callerId === meeting.ownerId`, drops `"public"` branch, resolve-then-fallback signed URL — `apps/__tests__/web/services/meeting-share-service.test.ts`.
+- [x] 5.2 `app/actions/shares.ts`: `createShareAction` resolves session, passes `callerId`.
 
 ## Phase 6: Remove Public Share Type + Participant Suggestions
 
