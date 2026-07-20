@@ -34,7 +34,7 @@ export async function GET(
 
   if (meeting.status === "completed" && meeting.recordingFilePath) {
     try {
-      const storageKey = buildRecordingStorageKey(meeting.id, meeting.url);
+      const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(meeting.id, meeting.url);
       const storage = StorageProviderFactory.getProvider();
       const signedUrl = await storage.getSignedUrl(storageKey);
       meeting.recordingFilePath = signedUrl;

@@ -71,9 +71,9 @@ PR2/PR4 sit near the 400-line edge; split further at apply time if actual diff o
 
 ## Phase 7: Recording Storage Key Naming
 
-- [ ] 7.1 RED+GREEN: `meetingProvider.ts` — `sanitizeMeetingNameForStorageKey`, `buildNamedRecordingStorageKey` — `apps/__tests__/shared/meeting-provider.test.ts`.
-- [ ] 7.2 RED+GREEN: `meetingWorkerService.ts` persists `recordingStorageKey` at upload — extend its test.
-- [ ] 7.3 RED+GREEN: resolve-then-fallback (`recordingStorageKey ?? buildRecordingStorageKey()`) in `meetingRecoveryService.ts`, `DeleteMeetingCommand.ts`, `api/meetings/[id]/route.ts`, `api/v1/extension/meetings/[id]/route.ts`, `(main)/meeting/[id]/page.tsx` — extend each file's existing test.
+- [x] 7.1 RED+GREEN: `meetingProvider.ts` — `sanitizeMeetingNameForStorageKey`, `buildNamedRecordingStorageKey` — `apps/__tests__/shared/meeting-provider.test.ts`.
+- [x] 7.2 RED+GREEN: `meetingWorkerService.ts` persists `recordingStorageKey` at upload — extend its test.
+- [x] 7.3 RED+GREEN: resolve-then-fallback (`recordingStorageKey ?? buildRecordingStorageKey()`) in `meetingRecoveryService.ts`, `DeleteMeetingCommand.ts`, `api/meetings/[id]/route.ts`, `api/v1/extension/meetings/[id]/route.ts`, `(main)/meeting/[id]/page.tsx` — extend each file's existing test (none pre-existed for these 5 sites; new focused test files created following the codebase's `mock.module` convention).
 
 ## Phase 8: Verification
 

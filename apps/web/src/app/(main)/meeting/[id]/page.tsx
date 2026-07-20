@@ -33,7 +33,7 @@ export default async function MeetingPage({
     try {
       const { StorageProviderFactory } = await import("@meeting-bot/shared/integrations/storage/StorageProviderFactory");
       const storage = StorageProviderFactory.getProvider();
-      const storageKey = buildRecordingStorageKey(meeting.id, meeting.url);
+      const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(meeting.id, meeting.url);
 
       console.log(`[MeetingPage] Generating signed URL for: ${storageKey}`);
       const signedUrl = await storage.getSignedUrl(storageKey);
