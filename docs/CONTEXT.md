@@ -57,3 +57,36 @@ _Avoid_: polling loop (describe el mecanismo, no el rol), status source.
 
 _Avoid_ (frase): **"fuente de estado única"** — ambigua: confunde el dueño del dato (el backend) con el
 deduplicador de fetch (el Single Poller). Usar "Single Poller" para el rol y "backend" para el dueño.
+
+# Meeting Ownership & Sharing
+
+Quién es dueño de una grabación y cómo decide darle acceso a otros. Distinto del sistema de enlaces
+externos ya existente (`meeting_shares`), que es anónimo/por token.
+
+## Language
+
+**Owner**:
+El `users.id` del usuario autenticado que originó la grabación (quien ejecutó `INVITE_BOT` desde la
+extensión, o encoló la reunión desde el dashboard), capturado al crear la fila de `meetings`. No se
+deriva de `organizerEmail` (dato de calendario, puede no corresponder a ningún usuario registrado).
+_Avoid_: organizer (es `organizerEmail`, un campo de calendario distinto), creator (ambiguo con
+`meetingShares.createdBy`, un campo de texto libre sin FK).
+
+**Access Grant**:
+Fila en `meeting_access_grants` que le da a un `users.id` concreto (`granteeUserId`) permiso de lectura
+sobre una reunión de otro `Owner`, con `expiresAt` opcional. Tabla nueva, separada de `meeting_shares`
+(esa es para visitantes anónimos por token/OTP; `Access Grant` es siempre un usuario registrado con
+`Session Auth`). Solo el `Owner` puede crear o revocar grants de su reunión — un `grantee` no puede
+re-compartir (no hay cadenas de compartido).
+_Avoid_: share (ambiguo con `meeting_shares`, el mecanismo externo), permission (genérico).
+
+**Participant**:
+Email de un asistente invitado, tomado de `event.attendees` del evento de Google Calendar que originó
+la reunión (solo existe si la reunión viene de un evento de calendario, no de un link pegado a mano).
+Se guarda como sugerencia de a quién compartir al terminar la grabación; el `Owner` sigue siendo quien
+decide y dispara el compartido (`Access Grant` si el email es de un usuario registrado, `restricted_email`
+si no lo es). No implica envío automático de email — eso es un gap documentado (sin proveedor de email
+real, el enlace se comparte manualmente).
+_Avoid_: attendee (usar "Participant" en el dominio de la app; "attendee" es el campo crudo de la API de
+Calendar), participants count (la cuenta de presencia en vivo del DOM de Meet — dato distinto, ya usado
+internamente en `GoogleMeet.ts` para detectar si el bot está solo).
