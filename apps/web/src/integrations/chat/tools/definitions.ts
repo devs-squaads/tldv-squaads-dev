@@ -160,7 +160,10 @@ export const getMeetingDetailTool: ToolDefinition<GetMeetingDetailArgs, MeetingD
     required: ["meeting_id"],
   },
   async execute({ meeting_id, include_transcription = false }) {
-    const meeting = await MeetingRepository.findById(meeting_id);
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return null;
+
+    const meeting = await WebMeetingRepository.findByIdForUser(session.user.id, meeting_id);
     if (!meeting) return null;
 
     const shares = await MeetingShareRepository.listByMeetingId(meeting_id);
