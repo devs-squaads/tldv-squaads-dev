@@ -57,3 +57,12 @@ _Avoid_: polling loop (describe el mecanismo, no el rol), status source.
 
 _Avoid_ (frase): **"fuente de estado única"** — ambigua: confunde el dueño del dato (el backend) con el
 deduplicador de fetch (el Single Poller). Usar "Single Poller" para el rol y "backend" para el dueño.
+
+**Stop Request**:
+Señal iniciada por el usuario desde el widget, válida únicamente en `status: "recording"`, que le pide al
+worker adelantar el corte de una captura en curso. No introduce un `Meeting Status` nuevo: la reunión
+sigue terminando por la transición `recording → completed` que ya existe hoy, igual que un final natural.
+Se registra como `stopRequestedAt` en la fila de la reunión — sigue la convención existente de
+`startsAt`/`endsAt` (timestamp de cuándo pasó, no un booleano).
+_Avoid_: cancel, abort, kill — el dominio ya usa "stop" (`stopRecording()` en el worker); no introducir
+sinónimos nuevos para el mismo concepto.
