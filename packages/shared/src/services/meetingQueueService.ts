@@ -6,6 +6,8 @@ export interface StartMeetingParams {
   meetingUrl: string;
   botName: string;
   duration: number;
+  ownerId: string;
+  participantEmails?: string[];
   providerHint?: string;
   meetingId?: string;
   sourceProvider?: string;
@@ -20,6 +22,8 @@ export async function queueMeetingRun(params: StartMeetingParams): Promise<{ id:
     meetingUrl,
     botName,
     duration,
+    ownerId,
+    participantEmails,
     providerHint,
     meetingId,
     sourceProvider,
@@ -52,6 +56,8 @@ export async function queueMeetingRun(params: StartMeetingParams): Promise<{ id:
       id,
       botName,
       url: normalizedMeetingUrl,
+      ownerId,
+      participantEmails: participantEmails ?? null,
       sourceProvider: sourceProvider ?? null,
       sourceEventId: sourceEventId ?? null,
       organizerEmail: organizerEmail ?? null,
