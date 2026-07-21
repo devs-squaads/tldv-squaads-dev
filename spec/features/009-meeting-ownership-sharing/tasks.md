@@ -60,10 +60,10 @@ removal and grant-service routing (the rest of 6.3) is untouched — still Phase
 
 ## Phase 4: Access Grants
 
-- [ ] 4.1 Extract `shareTtl.ts` (`DEFAULT_SHARE_TTL_OPTIONS_MINUTES` + helpers) out of `meetingShareService.ts`.
-- [ ] 4.2 RED+GREEN: `MeetingAccessGrantRepository.ts` (create/findById/listByMeetingId/findLiveGrant/revokeById) — `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts`.
-- [ ] 4.3 RED+GREEN: `meetingAccessGrantService.ts` (`createGrant`/`listGrantsByMeetingId`/`revokeGrant`, `callerId === meeting.ownerId`) — `apps/__tests__/web/services/meeting-access-grant-service.test.ts`.
-- [ ] 4.4 `app/actions/grants.ts`: `createGrantAction`/`revokeGrantAction` (owner-only).
+- [x] 4.1 Extract `shareTtl.ts` (`DEFAULT_SHARE_TTL_OPTIONS_MINUTES` + helpers) out of `meetingShareService.ts`.
+- [x] 4.2 RED+GREEN: `MeetingAccessGrantRepository.ts` (create/findById/listByMeetingId/findLiveGrant/revokeById) — `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts`.
+- [x] 4.3 RED+GREEN: `meetingAccessGrantService.ts` (`createGrant`/`listGrantsByMeetingId`/`revokeGrant`, `callerId === meeting.ownerId`) — `apps/__tests__/web/services/meeting-access-grant-service.test.ts`.
+- [x] 4.4 `app/actions/grants.ts`: `createGrantAction`/`revokeGrantAction` (owner-only).
 
 ## Phase 5: Share Authorization Retrofit
 

@@ -18,13 +18,14 @@ export function mockDrizzleOrmModule() {
     desc: () => ({ __op: "desc" }),
     and: (...args: unknown[]) => ({ __op: "and", args }),
     or: (...args: unknown[]) => ({ __op: "or", args }),
-    gt: (...args: [unknown, unknown]) => ({ __op: "gt", value: args[1] }),
-    gte: (...args: [unknown, unknown]) => ({ __op: "gte", value: args[1] }),
-    lte: (...args: [unknown, unknown]) => ({ __op: "lte", value: args[1] }),
-    ilike: (...args: [unknown, unknown]) => ({ __op: "ilike", value: args[1] }),
-    inArray: (...args: [unknown, unknown]) => ({ __op: "inArray", value: args[1] }),
-    isNotNull: (...args: [unknown]) => ({ __op: "isNotNull", value: args[0] }),
-    isNull: (...args: [unknown]) => ({ __op: "isNull", value: args[0] }),
+    isNull: (...args: unknown[]) => ({ __op: "isNull", args }),
+    gt: (...args: unknown[]) => ({ __op: "gt", args }),
+    gte: (...args: unknown[]) => ({ __op: "gte", args }),
+    lte: (...args: unknown[]) => ({ __op: "lte", args }),
+    ilike: (...args: unknown[]) => ({ __op: "ilike", args }),
+    inArray: (...args: unknown[]) => ({ __op: "inArray", args }),
+    isNotNull: (...args: unknown[]) => ({ __op: "isNotNull", args }),
+    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ __op: "sql", strings, values }),
   };
 }
 
