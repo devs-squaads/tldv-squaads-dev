@@ -113,6 +113,24 @@ describe("auth.ts allowlist gate", () => {
       expect(result).toBe(false);
       expect(upsertUserFromGoogle).not.toHaveBeenCalled();
     });
+
+    it("authorizes a dev-bypass sign-in even with an email not on the allowlist", async () => {
+      // Dev bypass exists to skip Google's OAuth dance entirely for local dev —
+      // it must work with an invented email that was never provisioned in
+      // authorized_accounts, otherwise it isn't actually a bypass.
+      process.env.SUPER_ADMIN_EMAILS = "";
+      findAuthorizedAccount.mockResolvedValueOnce(null);
+
+      const result = await callbacks.signIn!({
+        user: { id: "dev-bypass", email: "made-up-dev@nowhere.test" },
+        account: { provider: "dev-bypass", access_token: undefined },
+      } as never);
+
+      expect(result).toBe(true);
+      expect(upsertUserFromGoogle).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "dev-bypass", email: "made-up-dev@nowhere.test" }),
+      );
+    });
   });
 
   describe("dev auth bypass gate", () => {
@@ -179,6 +197,31 @@ describe("auth.ts allowlist gate", () => {
       } as never);
 
       expect((token as Record<string, unknown>).role).toBe("admin");
+    });
+
+    it("grants admin role for a dev-bypass session on initial sign-in without querying the allowlist", async () => {
+      const token = await callbacks.jwt!({
+        token: {},
+        account: { provider: "dev-bypass", access_token: undefined, refresh_token: undefined, expires_at: undefined },
+        user: { id: "dev-bypass", email: "made-up-dev@nowhere.test" },
+      } as never);
+
+      expect((token as Record<string, unknown>).role).toBe("admin");
+      expect(findAuthorizedAccount).not.toHaveBeenCalled();
+    });
+
+    it("keeps the dev-bypass admin role on later calls without re-querying the allowlist", async () => {
+      // Simulates a request on an existing dev-bypass session: no account/user
+      // (same as any carried-over token), only the isDevBypass marker set on
+      // the initial sign-in call persists across requests.
+      const token = await callbacks.jwt!({
+        token: { userId: "dev-bypass", role: "admin", email: "made-up-dev@nowhere.test", isDevBypass: true },
+        account: undefined,
+        user: undefined,
+      } as never);
+
+      expect((token as Record<string, unknown>).role).toBe("admin");
+      expect(findAuthorizedAccount).not.toHaveBeenCalled();
     });
 
     it("exposes role on session.user", async () => {

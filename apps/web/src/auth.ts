@@ -104,6 +104,25 @@ export function createAuthCallbacks(
     async signIn({ user, account }) {
       if (!account || !user.email) return false;
 
+      // Dev bypass exists to skip Google's OAuth dance entirely for local
+      // dev — isDevAuthBypassEnabled() is the actual security boundary
+      // (non-production + an explicitly-set env var); requiring the bypass
+      // identity to ALSO be pre-provisioned in authorized_accounts would
+      // defeat the point of a bypass, since it could then only ever be used
+      // with an email someone already registered ahead of time.
+      if (account.provider === "dev-bypass") {
+        await dependencies.upsertUserFromGoogle({
+          id: user.id,
+          name: user.name || null,
+          email: user.email,
+          image: user.image || null,
+          accessToken: account.access_token || "",
+          refreshToken: account.refresh_token,
+          expiresAt: account.expires_at,
+        });
+        return true;
+      }
+
       const role = await resolveAuthorizedRole(user.email, dependencies);
       if (!role) return false;
 
@@ -127,15 +146,23 @@ export function createAuthCallbacks(
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
         token.expiresAt = account.expires_at;
+        if (account.provider === "dev-bypass") {
+          token.isDevBypass = true;
+        }
       }
 
       // Re-resolve the role on every call (not only at initial sign-in) so a
       // deactivation from the Equipo admin UI takes effect on the user's next
       // request instead of waiting up to the session's maxAge to expire.
-      const email = user?.email ?? (token.email as string | undefined);
-      if (email) {
-        const authorizedAccount = await dependencies.findAuthorizedAccount(email.toLowerCase());
-        token.role = authorizedAccount?.isActive ? authorizedAccount.role : undefined;
+      // Dev-bypass sessions never touch the allowlist — see the signIn callback.
+      if (token.isDevBypass) {
+        token.role = "admin";
+      } else {
+        const email = user?.email ?? (token.email as string | undefined);
+        if (email) {
+          const authorizedAccount = await dependencies.findAuthorizedAccount(email.toLowerCase());
+          token.role = authorizedAccount?.isActive ? authorizedAccount.role : undefined;
+        }
       }
 
       // Check if token needs refresh
