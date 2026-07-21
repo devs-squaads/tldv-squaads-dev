@@ -33,12 +33,42 @@ afterEach(() => {
   moduleMock.restore();
 });
 
+/** Registers no-op UserRepository/MeetingAccessGrantRepository mocks so tests that don't care
+ * about the co-attendee grant loop stay hermetic (no accidental live-DB dependency). */
+function mockGrantDependencies(overrides: {
+  findByEmail?: (email: string) => Promise<{ id: string } | null>;
+  existsForMeetingAndGrantee?: (meetingId: string, granteeUserId: string) => Promise<boolean>;
+  createDedupedForMeetingAndGrantee?: (values: Record<string, unknown>) => Promise<unknown>;
+} = {}) {
+  const createCalls: Array<Record<string, unknown>> = [];
+
+  moduleMock.module("@meeting-bot/shared/repositories/UserRepository", () => ({
+    UserRepository: {
+      findByEmail: overrides.findByEmail || (async () => null),
+    },
+  }));
+
+  moduleMock.module("@meeting-bot/shared/repositories/MeetingAccessGrantRepository", () => ({
+    MeetingAccessGrantRepository: {
+      existsForMeetingAndGrantee: overrides.existsForMeetingAndGrantee || (async () => false),
+      createDedupedForMeetingAndGrantee:
+        overrides.createDedupedForMeetingAndGrantee ||
+        (async (values: Record<string, unknown>) => {
+          createCalls.push(values);
+        }),
+    },
+  }));
+
+  return { createCalls };
+}
+
 describe("autoJoinPollAndEnqueue", () => {
   it("uses BOT_DEFAULT_NAME for auto-join meetings", async () => {
     process.env.BOT_DEFAULT_NAME = "Legacy Bot";
     process.env.AUTO_JOIN_REQUIRE_SUPPORTED_LINK = "true";
 
     const queuedRuns: Array<{ botName: string; ownerId?: string; participantEmails?: string[] }> = [];
+    mockGrantDependencies();
 
     moduleMock.module("@/integrations/calendar/CalendarProviderRegistry", () => ({
       getConfiguredCalendarProvider: () => ({
@@ -67,6 +97,7 @@ describe("autoJoinPollAndEnqueue", () => {
     moduleMock.module("@meeting-bot/shared/services/meetingQueueService", () => ({
       queueMeetingRun: async (payload: { botName: string; ownerId?: string; participantEmails?: string[] }) => {
         queuedRuns.push(payload);
+        return { id: "meeting-1", ownerId: payload.ownerId };
       },
     }));
 
@@ -82,6 +113,7 @@ describe("autoJoinPollAndEnqueue", () => {
 
   it("threads the calendar event's ownerUserId and participantEmails into queueMeetingRun as ownerId (009 Phase 2)", async () => {
     const queuedRuns: Array<{ ownerId?: string; participantEmails?: string[] }> = [];
+    mockGrantDependencies();
 
     moduleMock.module("@/integrations/calendar/CalendarProviderRegistry", () => ({
       getConfiguredCalendarProvider: () => ({
@@ -110,6 +142,7 @@ describe("autoJoinPollAndEnqueue", () => {
     moduleMock.module("@meeting-bot/shared/services/meetingQueueService", () => ({
       queueMeetingRun: async (payload: { ownerId?: string; participantEmails?: string[] }) => {
         queuedRuns.push(payload);
+        return { id: "meeting-owned", ownerId: payload.ownerId };
       },
     }));
 
@@ -169,5 +202,109 @@ describe("autoJoinPollAndEnqueue", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe("co-attendee Access Grant (ADR-0007 exception, spec 010 Problem 2)", () => {
+    function mockSingleEventCalendar(participantEmails: string[]) {
+      moduleMock.module("@/integrations/calendar/CalendarProviderRegistry", () => ({
+        getConfiguredCalendarProvider: () => ({
+          listMeetingEvents: async () => [
+            {
+              provider: "google-calendar",
+              eventId: "evt-grant",
+              organizerEmail: "owner@example.com",
+              summary: "Grant Event",
+              meetingUrl: "https://meet.google.com/grant-defg-hij",
+              startsAt: new Date(Date.now() - 60_000),
+              endsAt: new Date(Date.now() + 30 * 60_000),
+              ownerUserId: "user-owner",
+              participantEmails,
+            },
+          ],
+        }),
+      }));
+
+      moduleMock.module("@meeting-bot/shared/repositories/CalendarAccountRepository", () => ({
+        CalendarAccountRepository: {
+          getCalendarEnabledUsers: async () => [{ id: "user-owner" }],
+        },
+      }));
+
+      moduleMock.module("@meeting-bot/shared/services/meetingQueueService", () => ({
+        queueMeetingRun: async () => ({ id: "meeting-grant", ownerId: "user-owner" }),
+      }));
+    }
+
+    it("grants access to a non-owner registered attendee with null expiresAt, and skips the Owner + unregistered attendees", async () => {
+      mockSingleEventCalendar(["owner@example.com", "guest@example.com", "unregistered@example.com"]);
+      const { createCalls } = mockGrantDependencies({
+        findByEmail: async (email) => {
+          if (email === "owner@example.com") return { id: "user-owner" };
+          if (email === "guest@example.com") return { id: "user-guest" };
+          return null;
+        },
+      });
+
+      const { autoJoinPollAndEnqueue } = await import(`../../../worker/src/services/autoJoinService.ts?test=${Date.now()}`);
+      await autoJoinPollAndEnqueue();
+
+      expect(createCalls).toHaveLength(1);
+      expect(createCalls[0]?.meetingId).toBe("meeting-grant");
+      expect(createCalls[0]?.ownerId).toBe("user-owner");
+      expect(createCalls[0]?.granteeUserId).toBe("user-guest");
+      expect(createCalls[0]?.expiresAt).toBeNull();
+    });
+
+    it("does not re-create a grant when one already exists for the pair (repeated poll idempotency)", async () => {
+      mockSingleEventCalendar(["guest@example.com"]);
+      const { createCalls } = mockGrantDependencies({
+        findByEmail: async () => ({ id: "user-guest" }),
+        existsForMeetingAndGrantee: async () => true,
+      });
+
+      const { autoJoinPollAndEnqueue } = await import(`../../../worker/src/services/autoJoinService.ts?test=${Date.now()}`);
+      await autoJoinPollAndEnqueue();
+
+      expect(createCalls).toHaveLength(0);
+    });
+
+    it("does not resurrect a deliberately revoked grant — the service trusts the repository's existence check regardless of revokedAt", async () => {
+      mockSingleEventCalendar(["guest@example.com"]);
+      // existsForMeetingAndGrantee's real semantics (proven at the repository layer) return true
+      // even for a revoked row; the service only needs to trust that boolean, not re-derive it.
+      const { createCalls } = mockGrantDependencies({
+        findByEmail: async () => ({ id: "user-guest" }),
+        existsForMeetingAndGrantee: async () => true,
+      });
+
+      const { autoJoinPollAndEnqueue } = await import(`../../../worker/src/services/autoJoinService.ts?test=${Date.now()}`);
+      await autoJoinPollAndEnqueue();
+
+      expect(createCalls).toHaveLength(0);
+    });
+
+    it("isolates one participant's grant failure — the rest of the batch still processes", async () => {
+      mockSingleEventCalendar(["fails@example.com", "guest@example.com"]);
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      const { createCalls } = mockGrantDependencies({
+        findByEmail: async (email) => {
+          if (email === "fails@example.com") throw new Error("lookup exploded");
+          if (email === "guest@example.com") return { id: "user-guest" };
+          return null;
+        },
+      });
+
+      try {
+        const { autoJoinPollAndEnqueue } = await import(`../../../worker/src/services/autoJoinService.ts?test=${Date.now()}`);
+        const result = await autoJoinPollAndEnqueue();
+
+        expect(result.enqueued).toBe(1);
+        expect(createCalls).toHaveLength(1);
+        expect(createCalls[0]?.granteeUserId).toBe("user-guest");
+        expect(warnSpy).toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 });

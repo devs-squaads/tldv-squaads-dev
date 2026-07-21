@@ -23,6 +23,58 @@ export class MeetingAccessGrantRepository {
       .orderBy(desc(meetingAccessGrants.createdAt));
   }
 
+  /**
+   * Idempotency guard: matches ANY row for the pair regardless of `revokedAt`/`expiresAt` — a
+   * manually revoked grant must never be silently re-created by a later auto-join poll. Contrast
+   * with `findLiveGrant` below, which only matches currently-active (non-revoked, non-expired) grants.
+   */
+  static async existsForMeetingAndGrantee(meetingId: string, granteeUserId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: meetingAccessGrants.id })
+      .from(meetingAccessGrants)
+      .where(and(eq(meetingAccessGrants.meetingId, meetingId), eq(meetingAccessGrants.granteeUserId, granteeUserId)))
+      .limit(1);
+    return Boolean(row);
+  }
+
+  /**
+   * Atomically inserts a grant keyed by (meetingId, granteeUserId), relying on the unconditional
+   * unique index on that pair. On conflict (a concurrent poll already created — or a revoked —
+   * grant for this pair), re-fetches and returns the existing row instead of inserting a duplicate.
+   * The DB constraint is the actual source of truth; `existsForMeetingAndGrantee` is only a
+   * fast-path optimization to skip an unnecessary insert attempt.
+   */
+  static async createDedupedForMeetingAndGrantee(
+    values: MeetingAccessGrantInsert
+  ): Promise<MeetingAccessGrantRecord> {
+    const [inserted] = await db
+      .insert(meetingAccessGrants)
+      .values(values)
+      .onConflictDoNothing({
+        target: [meetingAccessGrants.meetingId, meetingAccessGrants.granteeUserId],
+      })
+      .returning();
+
+    if (inserted) return inserted;
+
+    const [existing] = await db
+      .select()
+      .from(meetingAccessGrants)
+      .where(
+        and(
+          eq(meetingAccessGrants.meetingId, values.meetingId as string),
+          eq(meetingAccessGrants.granteeUserId, values.granteeUserId as string),
+        ),
+      )
+      .limit(1);
+    if (!existing) {
+      throw new Error(
+        `createDedupedForMeetingAndGrantee: conflict reported but no existing row found for ${values.meetingId}/${values.granteeUserId}`,
+      );
+    }
+    return existing;
+  }
+
   static async findLiveGrant(
     meetingId: string,
     granteeUserId: string,
