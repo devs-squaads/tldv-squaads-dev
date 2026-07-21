@@ -47,7 +47,7 @@ export async function reprocessMeetingTranscription(meetingId: string): Promise<
       return { success: false, error: "No summary provider configured" };
     }
 
-    const storageKey = buildRecordingStorageKey(meetingId, meeting.url);
+    const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(meetingId, meeting.url);
     const storage = StorageProviderFactory.getProvider();
     const tempPath = path.join(os.tmpdir(), `reprocess-${meetingId}.mp4`);
 
