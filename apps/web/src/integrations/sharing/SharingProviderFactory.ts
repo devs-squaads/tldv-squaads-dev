@@ -1,6 +1,5 @@
 import { EmailProviderFactory } from "@/integrations/email/EmailProviderFactory";
 import type { SharingProvider } from "@/integrations/sharing/SharingProvider";
-import { PublicSharingProvider } from "@/integrations/sharing/providers/PublicSharingProvider";
 import { RestrictedEmailSharingProvider } from "@/integrations/sharing/providers/RestrictedEmailSharingProvider";
 import type { ShareType } from "@/integrations/sharing/types";
 
@@ -21,8 +20,6 @@ function getAppBaseUrl(): string {
 export class SharingProviderFactory {
   static getProvider(shareType: ShareType): SharingProvider {
     switch (shareType) {
-      case "public":
-        return new PublicSharingProvider();
       case "restricted_email":
         return new RestrictedEmailSharingProvider({
           appBaseUrl: getAppBaseUrl(),

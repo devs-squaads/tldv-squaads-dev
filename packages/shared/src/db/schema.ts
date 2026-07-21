@@ -1,4 +1,4 @@
-import { pgEnum, pgTable, text, integer, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgEnum, pgTable, text, integer, timestamp, boolean, index, jsonb } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -43,14 +43,19 @@ export const meetings = pgTable("meetings", {
   name: text("name"),
   url: text("url").notNull(),
   botName: text("bot_name"),
+  ownerId: text("owner_id")
+    .notNull()
+    .references(() => users.id),
   sourceProvider: text("source_provider"),
   sourceEventId: text("source_event_id"),
   organizerEmail: text("organizer_email"),
+  participantEmails: jsonb("participant_emails").$type<string[]>(),
   status: meetingStatusEnum("status").default("pending").notNull(),
   errorMessage: text("error_message"),
   rawTranscription: text("raw_transcription"),
   summary: text("summary"),
   recordingFilePath: text("recording_file_path"),
+  recordingStorageKey: text("recording_storage_key"),
   startsAt: timestamp("starts_at", { withTimezone: true }),
   endsAt: timestamp("ends_at", { withTimezone: true }),
   durationMinutes: integer("duration_minutes").default(60),
@@ -63,7 +68,7 @@ export const settings = pgTable("settings", {
   value: text("value"),
 }).enableRLS();
 
-export const shareTypeEnum = pgEnum("share_type", ["public", "restricted_email"]);
+export const shareTypeEnum = pgEnum("share_type", ["restricted_email"]);
 
 export const shareAccessResultEnum = pgEnum("share_access_result", [
   "granted",
@@ -97,6 +102,17 @@ export const meetingShareAccessLogs = pgTable("meeting_share_access_logs", {
   ipHash: text("ip_hash"),
   userAgentHash: text("user_agent_hash"),
   accessedAt: timestamp("accessed_at", { withTimezone: true }).notNull(),
+}).enableRLS();
+
+export const meetingAccessGrants = pgTable("meeting_access_grants", {
+  id: text("id").primaryKey(),
+  meetingId: text("meeting_id").notNull(),
+  ownerId: text("owner_id").notNull(),
+  granteeUserId: text("grantee_user_id").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 }).enableRLS();
 
 export const chatMessages = pgTable(

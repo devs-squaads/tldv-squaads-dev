@@ -1,11 +1,14 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getServerSession } from "next-auth";
 import { MeetingDetailsView } from "@/components/MeetingDetailsView";
 import { SquaadsLogo } from "@/components/SquaadsLogo";
 import { SquaadsTitle } from "@/components/SquaadsTitle";
 import Link from "next/link";
 import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
-import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
+import { authOptions } from "@/auth";
+import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { MeetingShareService } from "@/services/meetingShareService";
+import { ParticipantSuggestionService } from "@/services/participantSuggestionService";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlassCursor } from "@/components/GlassLayout";
 import VenomBeam from "@/components/ui/venom-beam";
@@ -20,20 +23,26 @@ export default async function MeetingPage({
 }) {
   const { id } = await params;
 
-  const meeting = await MeetingRepository.findById(id);
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) redirect("/login");
+
+  const meeting = await WebMeetingRepository.findByIdForUser(session.user.id, id);
   if (!meeting) {
     notFound();
   }
 
   const initialShares = await MeetingShareService.listSharesByMeetingId(id);
   const ttlOptionsMinutes = MeetingShareService.getTtlOptionsMinutes();
+  const participantSuggestions = await ParticipantSuggestionService.resolveSuggestions(
+    meeting.participantEmails,
+  );
   // Try to generate a fresh signed URL for the recording
   const initialMeeting = { ...meeting };
   if (meeting.status === "completed" && meeting.recordingFilePath) {
     try {
       const { StorageProviderFactory } = await import("@meeting-bot/shared/integrations/storage/StorageProviderFactory");
       const storage = StorageProviderFactory.getProvider();
-      const storageKey = buildRecordingStorageKey(meeting.id, meeting.url);
+      const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(meeting.id, meeting.url);
 
       console.log(`[MeetingPage] Generating signed URL for: ${storageKey}`);
       const signedUrl = await storage.getSignedUrl(storageKey);
@@ -67,6 +76,7 @@ export default async function MeetingPage({
             initialMeeting={initialMeeting}
             initialShares={initialShares}
             ttlOptionsMinutes={ttlOptionsMinutes}
+            participantSuggestions={participantSuggestions}
           />
         </main>
       </VenomBeam>
