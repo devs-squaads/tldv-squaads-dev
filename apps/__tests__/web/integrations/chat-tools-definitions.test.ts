@@ -30,6 +30,13 @@ bunMock.module("@/repositories/MeetingShareRepository", () => ({
   },
 }));
 
+const mockFindByIdForUser = mock(() => Promise.resolve(null as unknown));
+bunMock.module("@/repositories/WebMeetingRepository", () => ({
+  WebMeetingRepository: {
+    findByIdForUser: mockFindByIdForUser,
+  },
+}));
+
 const mockCreateShare = mock(() =>
   Promise.resolve({
     id: "share-1",
@@ -48,7 +55,7 @@ bunMock.module("@/services/meetingShareService", () => ({
   },
 }));
 
-const { enqueueMeetingTool, manageMeetingShareTool } = await import(
+const { enqueueMeetingTool, manageMeetingShareTool, getMeetingDetailTool } = await import(
   "../../../web/src/integrations/chat/tools/definitions"
 );
 
@@ -164,5 +171,48 @@ describe("manage_meeting_share tool — owner-only create/revoke routed through 
 
       expect(result.success).toBe(false);
     });
+  });
+});
+
+describe("get_meeting_detail tool — ownership-scoped visibility (009 Phase 3)", () => {
+  beforeEach(() => {
+    mockGetServerSession.mockClear();
+    mockFindByIdForUser.mockClear();
+  });
+
+  it("returns null when there is no authenticated session", async () => {
+    mockGetServerSession.mockResolvedValueOnce(null);
+
+    const result = await getMeetingDetailTool.execute({ meeting_id: "meeting-1" });
+
+    expect(result).toBeNull();
+    expect(mockFindByIdForUser).not.toHaveBeenCalled();
+  });
+
+  it("scopes the lookup to the current session user, not an unscoped fetch", async () => {
+    mockGetServerSession.mockResolvedValueOnce({ user: { id: "user-1" } });
+    mockFindByIdForUser.mockResolvedValueOnce({
+      id: "meeting-1",
+      name: "Test meeting",
+      status: "completed",
+      summary: null,
+      rawTranscription: null,
+      errorMessage: null,
+      startsAt: null,
+      createdAt: new Date("2026-07-20T00:00:00Z"),
+    });
+
+    await getMeetingDetailTool.execute({ meeting_id: "meeting-1" });
+
+    expect(mockFindByIdForUser).toHaveBeenCalledWith("user-1", "meeting-1");
+  });
+
+  it("returns null for a meeting the caller does not own and has no grant for", async () => {
+    mockGetServerSession.mockResolvedValueOnce({ user: { id: "user-2" } });
+    mockFindByIdForUser.mockResolvedValueOnce(null);
+
+    const result = await getMeetingDetailTool.execute({ meeting_id: "meeting-1" });
+
+    expect(result).toBeNull();
   });
 });

@@ -25,6 +25,7 @@ export function mockDrizzleOrmModule() {
     ilike: (...args: unknown[]) => ({ __op: "ilike", args }),
     inArray: (...args: unknown[]) => ({ __op: "inArray", args }),
     isNotNull: (...args: unknown[]) => ({ __op: "isNotNull", args }),
+    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ __op: "sql", strings, values }),
   };
 }
 
