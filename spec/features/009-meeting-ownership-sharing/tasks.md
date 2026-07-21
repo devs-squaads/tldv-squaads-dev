@@ -72,9 +72,9 @@ removal and grant-service routing (the rest of 6.3) is untouched — still Phase
 
 ## Phase 6: Remove Public Share Type + Participant Suggestions
 
-- [ ] 6.1 Drop `"public"`: `sharing/types.ts`, `SharingProvider.ts`, `SharingProviderFactory.ts`; delete `PublicSharingProvider.ts`.
-- [ ] 6.2 `MeetingDetailsView.tsx`: remove public option/state/rendering; add per-participant suggestion list (from `participantEmails`) with individual confirm-to-grant, manual entry for ad-hoc meetings (UI — manual/integration validation, exempt per AGENTS.md).
-- [ ] 6.3 RED+GREEN: `integrations/chat/tools/definitions.ts` — `enqueue_meeting` sets `ownerId` from session; `manage_meeting_share` drops `"public"`, routes create/revoke through `MeetingShareService`/`MeetingAccessGrantService` — `apps/__tests__/web/integrations/chat-tools-definitions.test.ts`.
+- [x] 6.1 Drop `"public"`: `sharing/types.ts`, `SharingProvider.ts`, `SharingProviderFactory.ts`; delete `PublicSharingProvider.ts`. Also fixed `app/api/v1/shares/route.ts`'s M2M validation (still compared `body.shareType` against the literal `"public"` — a direct fallout of the type change, not in the original file list but required for a clean typecheck).
+- [x] 6.2 `MeetingDetailsView.tsx`: removed public option/state/rendering (shareType toggle, public confirm dialogs, public shares block); added per-participant suggestion list rendered from the new `participantSuggestions` prop (server-resolved by new `ParticipantSuggestionService`, RED+GREEN in `apps/__tests__/web/services/participant-suggestion-service.test.ts`) with individual confirm-to-grant (`createGrantAction`) or confirm-to-share (`createShareAction`, restricted_email) per row — never a bulk action. Ad-hoc meetings (empty suggestions) degrade to the existing manual email-entry field, now unconditionally restricted_email.
+- [x] 6.3 RED+GREEN: `integrations/chat/tools/definitions.ts` — `enqueue_meeting` sets `ownerId` from session (done in Phase 2); `manage_meeting_share` drops `"public"` from its args/schema and routes `create`/`revoke` through `MeetingShareService.createShare`/`revokeShare` (owner-only) instead of calling `MeetingShareRepository` directly, resolving `callerId` via `getServerSession` — extended `apps/__tests__/web/integrations/chat-tools-definitions.test.ts`.
 
 ## Phase 7: Recording Storage Key Naming
 

@@ -24,8 +24,8 @@ export async function POST(req: NextRequest) {
     if (!body.meetingId) {
       return NextResponse.json({ error: "meetingId is required" }, { status: 400 });
     }
-    if (!body.shareType || (body.shareType !== "public" && body.shareType !== "restricted_email")) {
-      return NextResponse.json({ error: "shareType must be public or restricted_email" }, { status: 400 });
+    if (!body.shareType || body.shareType !== "restricted_email") {
+      return NextResponse.json({ error: "shareType must be restricted_email" }, { status: 400 });
     }
 
     const result = await MeetingShareService.createShare({

@@ -8,6 +8,7 @@ import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
 import { authOptions } from "@/auth";
 import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { MeetingShareService } from "@/services/meetingShareService";
+import { ParticipantSuggestionService } from "@/services/participantSuggestionService";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlassCursor } from "@/components/GlassLayout";
 import VenomBeam from "@/components/ui/venom-beam";
@@ -32,6 +33,9 @@ export default async function MeetingPage({
 
   const initialShares = await MeetingShareService.listSharesByMeetingId(id);
   const ttlOptionsMinutes = MeetingShareService.getTtlOptionsMinutes();
+  const participantSuggestions = await ParticipantSuggestionService.resolveSuggestions(
+    meeting.participantEmails,
+  );
   // Try to generate a fresh signed URL for the recording
   const initialMeeting = { ...meeting };
   if (meeting.status === "completed" && meeting.recordingFilePath) {
@@ -72,6 +76,7 @@ export default async function MeetingPage({
             initialMeeting={initialMeeting}
             initialShares={initialShares}
             ttlOptionsMinutes={ttlOptionsMinutes}
+            participantSuggestions={participantSuggestions}
           />
         </main>
       </VenomBeam>
