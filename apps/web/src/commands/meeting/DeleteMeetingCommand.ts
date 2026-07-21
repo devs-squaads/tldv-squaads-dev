@@ -21,7 +21,7 @@ export class DeleteMeetingCommand implements MeetingCommand<DeleteMeetingResult>
 
     if (meeting.recordingFilePath) {
       try {
-        const storageKey = buildRecordingStorageKey(this.meetingId, meeting.url);
+        const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(this.meetingId, meeting.url);
         const storage = StorageProviderFactory.getProvider();
         await storage.deleteFile(storageKey);
       } catch (storageErr: unknown) {

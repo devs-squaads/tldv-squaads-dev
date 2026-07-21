@@ -34,6 +34,13 @@ export default function LoginPage() {
     signIn("google", { callbackUrl: redirectTarget });
   };
 
+  // ponytail: flag-gated dev-only escape hatch, never present on Production (see isDevAuthBypassEnabled in auth.ts)
+  const showDevBypass = process.env.NEXT_PUBLIC_DEV_AUTH_BYPASS === "true";
+  const handleDevBypassLogin = () => {
+    setLoading(true);
+    signIn("dev-bypass", { callbackUrl: redirectTarget });
+  };
+
   return (
     <div className="relative flex min-h-screen bg-[var(--background)] overflow-hidden">
       <GlassCursor />
@@ -247,6 +254,16 @@ export default function LoginPage() {
                     )}
                   </div>
                 </button>
+
+                {showDevBypass && (
+                  <button
+                    onClick={handleDevBypassLogin}
+                    disabled={loading}
+                    className="w-full h-10 rounded-xl text-xs font-medium border border-dashed border-[var(--muted-foreground)] text-[var(--muted-foreground)] hover:opacity-80 disabled:opacity-50"
+                  >
+                    Entrar sin Google (dev)
+                  </button>
+                )}
 
                 {/* Divider */}
                 <div className="flex items-center gap-4">

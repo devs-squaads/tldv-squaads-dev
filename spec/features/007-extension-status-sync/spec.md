@@ -4,7 +4,7 @@
 
 ## Qué hace
 
-El usuario ve el estado real del bot (Queued → Joining → Waiting admission → Recording → Transcribing → Summarizing → Completed) reflejado con baja latencia y de forma consistente tanto en el widget flotante dentro de la reunión como en el popup de la extensión. El widget no parpadea ni pierde la interacción (drag) al refrescarse.
+El usuario ve el estado real del bot reflejado con baja latencia y consistencia entre widget y popup. El widget no parpadea ni pierde interacción (drag) al refrescarse.
 
 ## Por qué
 
@@ -18,14 +18,22 @@ Causa raíz investigada: polling HTTP puro con piso de 5s (`POLL_INTERVAL_MS`), 
 
 ## Criterios de aceptación
 
-- [ ] Un cambio de estado en la base de datos se refleja en widget y popup en ≤ 3 s en condiciones normales.
-- [ ] Widget y popup nunca muestran estados distintos durante más de un ciclo de refresco (fuente de estado única).
-- [ ] El widget no se re-renderiza si el estado no cambió (sin parpadeo; un drag en curso no se interrumpe).
-- [ ] Una request lenta o colgada no congela las actualizaciones más allá del timeout configurado; el ciclo se recupera solo.
-- [ ] Existe un único loop de polling activo por meeting (sin duplicación widget + popup).
+- [ ] Un cambio de estado en la base de datos se refleja en widget y popup en ≤ 3 s en condiciones normales (intervalo adaptativo: 2s en fases transitorias, 5s en fases estables).
+- [ ] Widget y popup nunca muestran estados distintos (Single Poller como única fuente de polling; backend es source of truth).
+- [ ] El widget no se re-renderiza si el estado no cambió; cuando cambia, el render es quirúrgico (patch de atributos específicos, no innerHTML rebuild). Un drag en curso no se interrumpe.
+- [ ] Una request lenta o colgada no congela las actualizaciones más allá del timeout configurado; el ciclo se recupera solo (no solapar; relanzar inmediatamente tras resolución).
+- [ ] Existe un único loop de polling activo por meeting en el service worker (Single Poller), con difusión `MEETING_UPDATE` a widget y popup vía Port.
+- [ ] El service worker mantiene un mapa `meetingId → Set<Port>` para enrutar broadcasts al meeting correcto (soporta múltiples meetings simultáneos).
+- [ ] Tras un estado terminal (completed/error/rejected/admission_timeout), el SW hace un broadcast final garantizado a todos los Ports antes de detener el loop y desconectar los Ports.
+
+## Límites conocidos (declarados)
+
+- Latencia pico = `REQUEST_TIMEOUT_MS` (10s) durante una request colgada. Sin mitigación dentro del scope de 007 (el canal push SSE/WebSockets queda fuera de alcance).
+- Degradación a 30s vía `chrome.alarms` cuando no hay ningún consumidor vivo (SW suspendido sin Port de keepalive). Aceptable porque no hay consumidor mirando.
+- `chrome.alarms` tiene un mínimo de 30s (Chrome 120+); no puede usarse como tick base de 2s. Es solo fallback degradado.
 
 ## Fuera de alcance
 
-- **Canal push (SSE/WebSockets)** — evolución natural de esta feature; queda en el backlog del roadmap ("SSE/WebSockets para estado en tiempo real").
-- Mejoras del contenido/calidad de transcripciones (pendiente aparte).
+- **Canal push (SSE/WebSockets)** — evolución natural en backlog.
+- Mejoras de contenido/calidad de transcripciones.
 - Cambios en el pipeline de estados del worker (escribe los estados puntualmente; verificado).

@@ -15,6 +15,18 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 export const POLL_INTERVAL_MS = 5000;
 export const REQUEST_TIMEOUT_MS = 10000;
 
+/** Max time (ms) a Port can stay open without sending SUBSCRIBE before disconnect. */
+export const HANDSHAKE_TIMEOUT_MS = 2000;
+
+/** Popup mini-poll interval (ms) while searching for an active meeting. */
+export const SEARCH_POLL_INTERVAL_MS = 2000;
+
+/** chrome.alarms period in minutes for the degraded fallback (Chrome 120+ minimum is 30s). */
+export const FALLBACK_ALARM_PERIOD_MIN = 0.5;
+
+/** Name of the chrome.alarms fallback alarm. */
+export const FALLBACK_ALARM_NAME = "squaads-poll-fallback";
+
 export const ACTIVE_STATUSES: MeetingStatus[] = [
   "pending",
   "joining",

@@ -16,6 +16,16 @@ export function mockDrizzleOrmModule() {
     eq: (...args: [unknown, unknown]) => ({ __op: "eq", value: args[1] }),
     asc: () => ({ __op: "asc" }),
     desc: () => ({ __op: "desc" }),
+    and: (...args: unknown[]) => ({ __op: "and", args }),
+    or: (...args: unknown[]) => ({ __op: "or", args }),
+    isNull: (...args: unknown[]) => ({ __op: "isNull", args }),
+    gt: (...args: unknown[]) => ({ __op: "gt", args }),
+    gte: (...args: unknown[]) => ({ __op: "gte", args }),
+    lte: (...args: unknown[]) => ({ __op: "lte", args }),
+    ilike: (...args: unknown[]) => ({ __op: "ilike", args }),
+    inArray: (...args: unknown[]) => ({ __op: "inArray", args }),
+    isNotNull: (...args: unknown[]) => ({ __op: "isNotNull", args }),
+    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ __op: "sql", strings, values }),
   };
 }
 
@@ -25,5 +35,11 @@ export function mockDbSchemaModule() {
     chatMessages: {},
     settings: {},
     authorizedAccounts: {},
+    meetings: {},
+    meetingShares: {},
+    meetingShareAccessLogs: {},
+    meetingAccessGrants: {},
+    shareTypeEnum: { enumValues: ["restricted_email"] },
+    shareAccessResultEnum: { enumValues: ["granted", "denied", "expired", "revoked", "invalid"] },
   };
 }

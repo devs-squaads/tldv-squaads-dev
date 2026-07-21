@@ -5,6 +5,7 @@ export interface EnqueueMeetingInput {
   meetingUrl: string;
   botName: string;
   duration: number;
+  ownerId: string;
   provider?: string;
 }
 
@@ -16,6 +17,7 @@ export class EnqueueMeetingCommand implements MeetingCommand<{ id: string }> {
       meetingUrl: this.input.meetingUrl,
       botName: this.input.botName,
       duration: this.input.duration,
+      ownerId: this.input.ownerId,
       providerHint: this.input.provider,
     });
   }

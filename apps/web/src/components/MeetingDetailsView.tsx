@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import { deleteMeetingAction, reprocessMeetingAction, refineSummaryAction, retryMeetingAction } from "@/app/actions/bot";
 import { clearInactiveSharesAction, createShareAction, renewShareAccessAction, resendShareInviteAction, revokeShareAction } from "@/app/actions/shares";
+import { createGrantAction } from "@/app/actions/grants";
 import { useRouter } from "next/navigation";
 import { ChapterVideoPlayer, type Chapter } from "./ChapterVideoPlayer";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
@@ -37,7 +38,7 @@ interface Meeting {
 interface MeetingShare {
   id: string;
   meetingId: string;
-  shareType: "public" | "restricted_email";
+  shareType: "restricted_email";
   status: "active" | "expired" | "revoked";
   recipientEmail: string | null;
   shareUrl: string;
@@ -46,6 +47,13 @@ interface MeetingShare {
   createdAt: Date;
   updatedAt: Date;
   isActive: boolean;
+}
+
+/** Calendar-sourced participant suggestion (spec R6) — resolved server-side by ParticipantSuggestionService. */
+interface ParticipantSuggestion {
+  email: string;
+  /** Set when the email matches a registered user — routes to the Access Grant flow. */
+  granteeUserId: string | null;
 }
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -67,10 +75,13 @@ export function MeetingDetailsView({
   initialMeeting,
   initialShares,
   ttlOptionsMinutes,
+  participantSuggestions,
 }: {
   initialMeeting: Meeting;
   initialShares: MeetingShare[];
   ttlOptionsMinutes: number[];
+  /** Empty for ad-hoc meetings (no calendar source) — UI degrades to manual email entry. */
+  participantSuggestions: ParticipantSuggestion[];
 }) {
   const configuredTtlOptions = ttlOptionsMinutes.length > 0 ? ttlOptionsMinutes : [60];
   const defaultTtlMinutes = configuredTtlOptions[0];
@@ -87,8 +98,10 @@ export function MeetingDetailsView({
   const [isRefining, setIsRefining] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [showSharing, setShowSharing] = useState(false);
-  const [shareType, setShareType] = useState<"public" | "restricted_email">("public");
   const [recipientEmail, setRecipientEmail] = useState("");
+  const [participantActionState, setParticipantActionState] = useState<
+    Record<string, "loading" | "done" | "error">
+  >({});
   const [shareNoExpiry, setShareNoExpiry] = useState(true);
   const [shareTtlMinutes, setShareTtlMinutes] = useState(defaultTtlMinutes);
   const [isCreatingShare, setIsCreatingShare] = useState(false);
@@ -167,8 +180,8 @@ export function MeetingDetailsView({
     try {
       const result = await createShareAction({
         meetingId: meeting.id,
-        shareType,
-        recipientEmail: shareType === "restricted_email" ? recipientEmail : undefined,
+        shareType: "restricted_email",
+        recipientEmail,
         noExpiry: shareNoExpiry,
         ttlMinutes: shareNoExpiry ? undefined : shareTtlMinutes,
       });
@@ -200,12 +213,67 @@ export function MeetingDetailsView({
     }
   };
 
-  const handleRevokeShare = async (share: MeetingShare) => {
-    if (share.shareType === "public") {
-      const confirmed = window.confirm("Revocar este enlace desactivará el acceso actual. ¿Quieres continuar?");
-      if (!confirmed) return;
+  // Per-participant suggestion actions (spec R6): individual confirm-to-grant/share,
+  // never a bulk "share with all" action — the Owner reviews each one on its own.
+  const handleGrantParticipant = async (suggestion: ParticipantSuggestion) => {
+    if (!suggestion.granteeUserId) return;
+    setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "loading" }));
+    try {
+      const result = await createGrantAction({
+        meetingId: meeting.id,
+        granteeUserId: suggestion.granteeUserId,
+        noExpiry: true,
+      });
+      if (!result.success) {
+        alert(`Error al dar acceso a ${suggestion.email}: ${result.error}`);
+        setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+        return;
+      }
+      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "done" }));
+    } catch (err) {
+      console.error(err);
+      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
     }
+  };
 
+  const handleShareWithParticipant = async (suggestion: ParticipantSuggestion) => {
+    setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "loading" }));
+    try {
+      const result = await createShareAction({
+        meetingId: meeting.id,
+        shareType: "restricted_email",
+        recipientEmail: suggestion.email,
+        noExpiry: true,
+      });
+      if (!result.success || !result.share) {
+        alert(`Error al compartir con ${suggestion.email}: ${result.error}`);
+        setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+        return;
+      }
+
+      const now = new Date();
+      const newShare: MeetingShare = {
+        id: result.share.id,
+        meetingId: meeting.id,
+        shareType: result.share.shareType,
+        status: "active",
+        recipientEmail: result.share.recipientEmail,
+        shareUrl: result.share.shareUrl,
+        expiresAt: result.share.expiresAt ? new Date(result.share.expiresAt) : null,
+        revokedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        isActive: true,
+      };
+      setShares((prev) => [newShare, ...prev]);
+      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "done" }));
+    } catch (err) {
+      console.error(err);
+      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+    }
+  };
+
+  const handleRevokeShare = async (share: MeetingShare) => {
     setActiveShareActionId(share.id);
     try {
       const result = await revokeShareAction(share.id);
@@ -226,19 +294,11 @@ export function MeetingDetailsView({
   };
 
   const handleResendShare = async (share: MeetingShare) => {
-    if (share.shareType === "public") {
-      const confirmed = window.confirm(
-        "Generar un nuevo enlace revocará el actual. Puedes copiar el enlace actual si no quieres revocarlo. ¿Generar nuevo enlace?"
-      );
-      if (!confirmed) return;
-    }
-    if (share.shareType === "restricted_email") {
-      const recipientSuffix = share.recipientEmail ? ` a ${share.recipientEmail}` : "";
-      const confirmed = window.confirm(
-        `Se enviará un nuevo enlace de acceso${recipientSuffix}. El enlace anterior quedará invalidado. ¿Deseas continuar?`
-      );
-      if (!confirmed) return;
-    }
+    const recipientSuffix = share.recipientEmail ? ` a ${share.recipientEmail}` : "";
+    const confirmed = window.confirm(
+      `Se enviará un nuevo enlace de acceso${recipientSuffix}. El enlace anterior quedará invalidado. ¿Deseas continuar?`
+    );
+    if (!confirmed) return;
 
     setActiveShareActionId(share.id);
     try {
@@ -396,11 +456,6 @@ export function MeetingDetailsView({
   })();
 
   const wordCount = meeting.rawTranscription ? meeting.rawTranscription.split(/\s+/).length : 0;
-  const shareTypeLabels: Record<"public" | "restricted_email", string> = {
-    public: "Público",
-    restricted_email: "Restringido",
-  };
-  const shareTypeOptions: Array<"public" | "restricted_email"> = ["public", "restricted_email"];
   const formatTtlLabel = (ttlMinutes: number): string => {
     const toDisplayValue = (value: number): string => {
       if (Number.isInteger(value)) return String(value);
@@ -420,7 +475,6 @@ export function MeetingDetailsView({
     return `${ttlMinutes} ${ttlMinutes === 1 ? "minuto" : "minutos"}`;
   };
 
-  const publicShares = shares.filter((share) => share.shareType === "public");
   const restrictedShares = shares.filter((share) => share.shareType === "restricted_email");
   const inactiveSharesCount = shares.filter((share) => share.status !== "active").length;
 
@@ -441,10 +495,7 @@ export function MeetingDetailsView({
           </Badge>
         </div>
         <div className="flex items-center gap-2">
-          {share.shareType === "public" && share.status === "active" && (
-            <CopyButton text={share.shareUrl} label="Copiar enlace" />
-          )}
-          {share.shareType === "restricted_email" && share.status === "active" && (
+          {share.status === "active" && (
             <Button
               variant="outline"
               size="sm"
@@ -454,18 +505,6 @@ export function MeetingDetailsView({
             >
               {activeShareActionId === share.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
               Reenviar
-            </Button>
-          )}
-          {share.shareType === "public" && share.status === "active" && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1"
-              onClick={() => handleResendShare(share)}
-              disabled={activeShareActionId === share.id}
-            >
-              {activeShareActionId === share.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Share2 className="h-3 w-3" />}
-              Nuevo enlace
             </Button>
           )}
           {share.status === "expired" && (
@@ -955,36 +994,66 @@ export function MeetingDetailsView({
         {showSharing && (
           <CardContent className="space-y-6">
             <p className="text-sm text-[var(--muted-foreground)]">
-              Crea enlaces <strong>públicos</strong> o con acceso restringido mediante <strong>email</strong>
+              Otorga acceso restringido por <strong>email</strong> a esta reunión
             </p>
+
+            {participantSuggestions.length > 0 ? (
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-[var(--muted-foreground)]">
+                  Participantes detectados en el calendario
+                </label>
+                <div className="space-y-2">
+                  {participantSuggestions.map((suggestion) => {
+                    const actionState = participantActionState[suggestion.email];
+                    const isLoading = actionState === "loading";
+                    const isDone = actionState === "done";
+                    return (
+                      <div
+                        key={suggestion.email}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"
+                      >
+                        <div className="flex flex-col">
+                          <span className="text-sm">{suggestion.email}</span>
+                          <span className="text-xs text-[var(--muted-foreground)]">
+                            {suggestion.granteeUserId ? "Usuario registrado" : "Sin cuenta — acceso restringido por email"}
+                          </span>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs gap-1"
+                          disabled={isLoading || isDone}
+                          onClick={() =>
+                            suggestion.granteeUserId
+                              ? handleGrantParticipant(suggestion)
+                              : handleShareWithParticipant(suggestion)
+                          }
+                        >
+                          {isLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Share2 className="h-3 w-3" />}
+                          {isDone ? "Acceso otorgado" : suggestion.granteeUserId ? "Dar acceso" : "Compartir por email"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--muted-foreground)]">
+                Sin participantes detectados desde el calendario. Compartí manualmente con un email abajo.
+              </p>
+            )}
+
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-xs font-medium text-[var(--muted-foreground)]">Tipo de enlace</label>
-              <select
-                value={shareType}
-                onChange={(e) => setShareType(e.target.value as "public" | "restricted_email")}
-                className="w-full h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
-              >
-                {shareTypeOptions.map((type) => (
-                  <option key={type} value={type}>
-                    {shareTypeLabels[type]}
-                  </option>
-                ))}
-              </select>
+                <label className="text-xs font-medium text-[var(--muted-foreground)]">Email destinatario</label>
+                <input
+                  type="email"
+                  value={recipientEmail}
+                  onChange={(e) => setRecipientEmail(e.target.value)}
+                  placeholder="usuario@dominio.com"
+                  className="w-full h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
+                />
               </div>
-
-              {shareType === "restricted_email" && (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-[var(--muted-foreground)]">Email destinatario</label>
-                  <input
-                    type="email"
-                    value={recipientEmail}
-                    onChange={(e) => setRecipientEmail(e.target.value)}
-                    placeholder="usuario@dominio.com"
-                    className="w-full h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
-                  />
-                </div>
-              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -1013,7 +1082,7 @@ export function MeetingDetailsView({
                 size="sm"
                 className="gap-1.5"
                 onClick={handleCreateShare}
-                disabled={isCreatingShare || (shareType === "restricted_email" && !recipientEmail.trim())}
+                disabled={isCreatingShare || !recipientEmail.trim()}
               >
                 {isCreatingShare ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
                 {isCreatingShare ? "Creando..." : "Crear enlace"}
@@ -1036,15 +1105,6 @@ export function MeetingDetailsView({
                 <CopyButton text={latestShareUrl} label="Copiar enlace" />
               </div>
             )}
-
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4 space-y-3">
-              <h4 className="text-sm font-semibold text-black-700 dark:text-emerald-300">Enlaces de acceso público</h4>
-              {publicShares.length === 0 ? (
-                <p className="text-sm text-[var(--muted-foreground)]">No hay enlaces públicos.</p>
-              ) : (
-                publicShares.map(renderShareRow)
-              )}
-            </div>
 
             <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-4 space-y-3">
               <h4 className="text-sm font-semibold text-black-700 dark:text-blue-300">Enlaces de acceso restringido</h4>

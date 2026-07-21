@@ -1,0 +1,89 @@
+# Tasks: Meeting Ownership & Personalized Sharing (+ S3 Naming)
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~2000-2100 (7 work units, ~120-400 each) |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | PR1 → {PR2, PR3, PR4, PR7 parallel} → {PR5 → PR6} |
+| Delivery strategy | ask-on-risk (default, none supplied) |
+| Chain strategy | feature-branch-chain (resolved — confirmed by branch structure: `feat/009-02-owner-capture` created off `feat/009-01-schema`, off tracker `feat/009-meeting-ownership-sharing`) |
+
+Decision needed before apply: No — resolved as feature-branch-chain
+Chained PRs recommended: Yes
+Chain strategy: feature-branch-chain
+400-line budget risk: High
+
+### Suggested Work Units
+
+| Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
+|---|---|---|---|---|---|
+| 1 | Schema + migration + `UserRepository` | PR1 (base) | `bun test apps/__tests__/shared/repositories/user-repository.test.ts` | `bun run infra:reset` | Revert schema.ts, migration file, UserRepository.ts |
+| 2 | Owner capture at all creation paths | PR2 (needs PR1) | `bun test apps/__tests__/shared/services/meeting-queue-service.test.ts apps/__tests__/web/api/bot-start.test.ts` | `bun run dev` — queue via dashboard/extension | Revert queueMeetingRun/EnqueueMeetingCommand/bot routes |
+| 3 | Ownership-scoped reads | PR3 (needs PR1, parallel PR2) | `bun test apps/__tests__/web/repositories/web-meeting-repository.test.ts` | N/A — query-layer, unit-covered | Revert WebMeetingRepository.ts + page callers |
+| 4 | Access Grants (repo/service/action) | PR4 (needs PR1, parallel PR2/3) | `bun test apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts apps/__tests__/web/services/meeting-access-grant-service.test.ts` | N/A — service-layer, unit-covered | Revert shareTtl.ts, MeetingAccessGrantRepository/Service, grants.ts |
+| 5 | Share authorization retrofit | PR5 (needs PR4) | `bun test apps/__tests__/web/services/meeting-share-service.test.ts` | N/A — service-layer, unit-covered | Revert meetingShareService.ts callerId check, shares.ts |
+| 6 | Remove public share + participant suggestions | PR6 (needs PR2, PR4, PR5) | `bun test apps/__tests__/web/integrations/chat-tools-definitions.test.ts` | `bun run dev:web` — manual sharing UI walkthrough | Revert sharing types/Factory/delete file, MeetingDetailsView.tsx, definitions.ts |
+| 7 | S3 storage key naming | PR7 (needs PR1 only, fully parallel) | `bun test apps/__tests__/shared/meeting-provider.test.ts` | `bun run dev:worker` — record+upload, verify key persisted | Revert meetingProvider.ts additions + 6 resolve-then-fallback sites |
+
+PR2/PR4 sit near the 400-line edge; split further at apply time if actual diff overruns.
+
+## Phase 1: Schema & Migration Foundation
+
+- [x] 1.1 `packages/shared/src/db/schema.ts`: add `meetings.ownerId` (NOT NULL FK users.id), `recordingStorageKey`, `participantEmails`; new `meetingAccessGrants` table; `shareTypeEnum` drops `"public"`.
+- [x] 1.2 `drizzle/0006_meeting_ownership_and_sharing.sql`: revoke+relabel existing `"public"` rows, recreate `share_type` enum, add new columns/table.
+- [x] 1.3 RED+GREEN: `packages/shared/src/repositories/UserRepository.ts` (`findByEmail`) + `apps/__tests__/shared/repositories/user-repository.test.ts`.
+- [x] 1.4 Apply migration via `bun run infra:reset` + `bun run db:push`; confirmed schema loads clean against a fresh local DB (2026-07-20). No pre-existing meeting/db containers reused — stale containers from a prior session (`meeting-db`, `meeting-storage`, `meeting-storage-mc`, `meeting-worker`) were removed first since they conflicted with `docker compose up`.
+
+## Phase 2: Owner Capture at Creation
+
+- [x] 2.1 RED+GREEN: `meetingQueueService.ts` — mandatory `ownerId`, optional `participantEmails`, threaded to insert — `apps/__tests__/shared/services/meeting-queue-service.test.ts`.
+- [x] 2.2 Thread `ownerId`: `EnqueueMeetingCommand.ts`, `meetingService.ts`, `app/actions/bot.ts` (session, 401 without `session.user.id`), `api/v1/extension/bot/start/route.ts` (`auth.payload.userId`, no new logic). RED+GREEN added for `bot.ts`'s new unauthorized branch (`apps/__tests__/web/actions/bot-start-action.test.ts`) beyond the plan's minimum, since it introduces real conditional logic.
+- [x] 2.3 RED+GREEN: legacy `api/bot/start/route.ts` requires `ownerEmail`, resolves via `UserRepository.findByEmail`, 400 on missing/unknown — `apps/__tests__/web/api/bot-start.test.ts`.
+- [x] 2.4 `apps/worker/src/integrations/calendar/types.ts`: `CalendarMeetingEvent` gains `ownerUserId`, `participantEmails`. Implemented as optional fields (`ownerUserId?: string`, `participantEmails?: string[]`) rather than mandatory — required for type-correctness since the testing-strategy table itself says the service-account fallback path "yields no ownerUserId".
+- [x] 2.5 RED+GREEN: `GoogleCalendarProvider.ts` stamps `ownerUserId` per OAuth user, maps `event.attendees` — `apps/__tests__/worker/calendar/google-calendar-provider.test.ts`.
+- [x] 2.6 RED+GREEN: `autoJoinService.ts` threads `ownerId`/`participantEmails` on primary path, skips+logs on ownerless env-fallback — `apps/__tests__/worker/shared/auto-join-service.test.ts`.
+
+Also implemented ahead of schedule (explicitly requested alongside Phase 2, out of tasks.md's own
+phase order): the `enqueue_meeting` half of task 6.3 — `integrations/chat/tools/definitions.ts`'s
+`enqueueMeetingTool.execute` now resolves `getServerSession(authOptions)` and sets `ownerId` from
+`session.user.id`, rejecting with a structured error result when unauthenticated — RED+GREEN in
+`apps/__tests__/web/integrations/chat-tools-definitions.test.ts`. `manage_meeting_share`'s `"public"`
+removal and grant-service routing (the rest of 6.3) is untouched — still Phase 6 scope.
+
+## Phase 3: Ownership-Scoped Visibility
+
+- [x] 3.1 RED+GREEN: `WebMeetingRepository.ts` — owner-or-live-grant WHERE, joined to `authorized_accounts.isActive`, no role bypass — `apps/__tests__/web/repositories/web-meeting-repository.test.ts`.
+- [x] 3.2 Thread `session.user.id` into meeting list/detail callers under `apps/web/src/app/(main)/`.
+
+## Phase 4: Access Grants
+
+- [x] 4.1 Extract `shareTtl.ts` (`DEFAULT_SHARE_TTL_OPTIONS_MINUTES` + helpers) out of `meetingShareService.ts`.
+- [x] 4.2 RED+GREEN: `MeetingAccessGrantRepository.ts` (create/findById/listByMeetingId/findLiveGrant/revokeById) — `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts`.
+- [x] 4.3 RED+GREEN: `meetingAccessGrantService.ts` (`createGrant`/`listGrantsByMeetingId`/`revokeGrant`, `callerId === meeting.ownerId`) — `apps/__tests__/web/services/meeting-access-grant-service.test.ts`.
+- [x] 4.4 `app/actions/grants.ts`: `createGrantAction`/`revokeGrantAction` (owner-only).
+
+## Phase 5: Share Authorization Retrofit
+
+- [x] 5.1 RED+GREEN: `meetingShareService.ts` — `createShare` requires `callerId === meeting.ownerId`, drops `"public"` branch, resolve-then-fallback signed URL — `apps/__tests__/web/services/meeting-share-service.test.ts`.
+- [x] 5.2 `app/actions/shares.ts`: `createShareAction` resolves session, passes `callerId`.
+
+## Phase 6: Remove Public Share Type + Participant Suggestions
+
+- [x] 6.1 Drop `"public"`: `sharing/types.ts`, `SharingProvider.ts`, `SharingProviderFactory.ts`; delete `PublicSharingProvider.ts`. Also fixed `app/api/v1/shares/route.ts`'s M2M validation (still compared `body.shareType` against the literal `"public"` — a direct fallout of the type change, not in the original file list but required for a clean typecheck).
+- [x] 6.2 `MeetingDetailsView.tsx`: removed public option/state/rendering (shareType toggle, public confirm dialogs, public shares block); added per-participant suggestion list rendered from the new `participantSuggestions` prop (server-resolved by new `ParticipantSuggestionService`, RED+GREEN in `apps/__tests__/web/services/participant-suggestion-service.test.ts`) with individual confirm-to-grant (`createGrantAction`) or confirm-to-share (`createShareAction`, restricted_email) per row — never a bulk action. Ad-hoc meetings (empty suggestions) degrade to the existing manual email-entry field, now unconditionally restricted_email.
+- [x] 6.3 RED+GREEN: `integrations/chat/tools/definitions.ts` — `enqueue_meeting` sets `ownerId` from session (done in Phase 2); `manage_meeting_share` drops `"public"` from its args/schema and routes `create`/`revoke` through `MeetingShareService.createShare`/`revokeShare` (owner-only) instead of calling `MeetingShareRepository` directly, resolving `callerId` via `getServerSession` — extended `apps/__tests__/web/integrations/chat-tools-definitions.test.ts`.
+
+## Phase 7: Recording Storage Key Naming
+
+- [x] 7.1 RED+GREEN: `meetingProvider.ts` — `sanitizeMeetingNameForStorageKey`, `buildNamedRecordingStorageKey` — `apps/__tests__/shared/meeting-provider.test.ts`.
+- [x] 7.2 RED+GREEN: `meetingWorkerService.ts` persists `recordingStorageKey` at upload — extend its test.
+- [x] 7.3 RED+GREEN: resolve-then-fallback (`recordingStorageKey ?? buildRecordingStorageKey()`) in `meetingRecoveryService.ts`, `DeleteMeetingCommand.ts`, `api/meetings/[id]/route.ts`, `api/v1/extension/meetings/[id]/route.ts`, `(main)/meeting/[id]/page.tsx` — extend each file's existing test (none pre-existed for these 5 sites; new focused test files created following the codebase's `mock.module` convention).
+
+## Phase 8: Verification
+
+- [ ] 8.1 `bun test apps/__tests__` green across all new/modified suites.
+- [ ] 8.2 `bun run lint && bun run typecheck && bun run build:web`.
+- [ ] 8.3 Manual walkthrough: public-share removal, per-participant suggestions, ad-hoc no-suggestions, deactivated-owner lockout.
