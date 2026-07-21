@@ -7,12 +7,14 @@ import { ChatMessages } from "@/components/chat/ChatMessages";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatSuggestions } from "@/components/chat/ChatSuggestion";
 import { useChatStream, getToolLabel } from "@/components/chat/useChatStream";
+import { hasSupportTopicMarker } from "@/components/chat/chatWidget.logic";
 import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
 
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
   const { messages, suggestions, isLoading, error, activeToolCall, sendMessage, addQuickReply, reset } =
     useChatStream();
+  const showBugReport = hasSupportTopicMarker(messages);
   const normalizedError = error?.toLowerCase() ?? "";
   const isTokenError =
     /token|quota|rate limit|429|credit|crédito|l[ií]mite/.test(normalizedError);
@@ -52,6 +54,10 @@ export function ChatWidget() {
 
   function handleSuggestionAction() {
     setOpen(false);
+  }
+
+  function handleReset() {
+    reset();
   }
 
   return (
@@ -157,6 +163,12 @@ export function ChatWidget() {
           <ChatMessages messages={messages} onQuickReply={addQuickReply} />
         </div>
 
+        {showBugReport && (
+          <div className="flex justify-center pb-2">
+            <ReportBugButton />
+          </div>
+        )}
+
         {/* Error banner */}
         {error && (
           showRobotError ? (
@@ -224,16 +236,13 @@ export function ChatWidget() {
           >
             <button
               type="button"
-              onClick={reset}
+              onClick={handleReset}
               className="py-1.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
             >
               Nueva conversación
             </button>
           </div>
         )}
-        <div className="flex justify-center pb-2">
-          <ReportBugButton />
-        </div>
       </div>
 
       {/* Floating trigger button */}

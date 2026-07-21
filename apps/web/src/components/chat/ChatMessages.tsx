@@ -255,9 +255,7 @@ Todo se guarda en PostgreSQL. Los archivos de video/audio van a S3/MinIO.`,
 **Lo que podés hacer ahora:**
 - Describí tu problema directamente en este chat — tengo acceso al estado de tus reuniones y configuración del sistema para ayudarte a diagnosticar
 - Si el problema está relacionado con una reunión específica, mencioná el ID o la fecha
-
-**Próximamente:**
-Estamos preparando un sistema de escalación directa al equipo. Con un clic vas a poder enviar tu consulta con el historial del chat y el contexto de tu cuenta al canal de soporte del equipo.
+- Usá el botón "Reportar un problema" que aparece debajo de esta respuesta para enviar tu reporte directo al canal de soporte del equipo
 
 Si el asistente no puede resolver tu problema, contame qué está pasando y te orientamos en los próximos pasos.`,
   },
