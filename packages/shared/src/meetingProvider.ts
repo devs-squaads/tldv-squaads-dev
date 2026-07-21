@@ -126,3 +126,26 @@ export function buildRecordingStorageKey(meetingId: string, meetingUrl: string, 
   const provider = resolveMeetingProvider(meetingUrl, providerHint);
   return `${provider}/${meetingId}.mp4`;
 }
+
+export function sanitizeMeetingNameForStorageKey(name: string | null | undefined): string {
+  const sanitized = (name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized || "meeting";
+}
+
+export function buildNamedRecordingStorageKey(
+  meetingId: string,
+  meetingName: string | null | undefined,
+  recordedAt: Date,
+  meetingUrl: string,
+  providerHint?: string,
+): string {
+  const provider = resolveMeetingProvider(meetingUrl, providerHint);
+  const date = recordedAt.toISOString().slice(0, 10);
+  const safeName = sanitizeMeetingNameForStorageKey(meetingName);
+  return `${provider}/${safeName}_${date}_${meetingId}.mp4`;
+}

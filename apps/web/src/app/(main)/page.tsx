@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getServerSession } from "next-auth";
 import { Settings } from "lucide-react";
+import { authOptions } from "@/auth";
 import { SquaadsLogo } from "@/components/SquaadsLogo";
 import { SquaadsTitle } from "@/components/SquaadsTitle";
 import { DashboardClient } from "@/components/DashboardClient";
@@ -14,7 +17,10 @@ import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const allMeetings = await WebMeetingRepository.listRecent();
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) redirect("/login");
+
+  const allMeetings = await WebMeetingRepository.listRecent(session.user.id);
 
   return (
     <div className="relative flex min-h-screen flex-col bg-[var(--background)]">

@@ -5,6 +5,8 @@
  * repositorios existentes directamente. No hay lógica nueva de negocio aquí.
  */
 
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import { WebMeetingRepository, type MeetingFilters } from "@/repositories/WebMeetingRepository";
 import { WebSettingsRepository } from "@/repositories/WebSettingsRepository";
 import { MeetingShareRepository } from "@/repositories/MeetingShareRepository";
@@ -116,8 +118,11 @@ export const searchMeetingsTool: ToolDefinition<SearchMeetingsArgs, MeetingSumma
     },
   },
   async execute({ status, from_date, to_date, query, limit = 10 }) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return [];
+
     const filters: MeetingFilters = { status, from_date, to_date, query, limit };
-    const results = await WebMeetingRepository.listFiltered(filters);
+    const results = await WebMeetingRepository.listFiltered(session.user.id, filters);
     return results.map(toMeetingSummary);
   },
 };
@@ -155,7 +160,10 @@ export const getMeetingDetailTool: ToolDefinition<GetMeetingDetailArgs, MeetingD
     required: ["meeting_id"],
   },
   async execute({ meeting_id, include_transcription = false }) {
-    const meeting = await MeetingRepository.findById(meeting_id);
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return null;
+
+    const meeting = await WebMeetingRepository.findByIdForUser(session.user.id, meeting_id);
     if (!meeting) return null;
 
     const shares = await MeetingShareRepository.listByMeetingId(meeting_id);
@@ -327,6 +335,19 @@ export const enqueueMeetingTool: ToolDefinition<EnqueueMeetingArgs, EnqueueMeeti
   },
   mutates: true,
   async execute({ meeting_url, bot_name, duration_minutes }) {
+    // No hay contexto de sesión threadeado en el tool-calling stack hoy —
+    // resolvemos getServerSession directo acá (elección pragmática del
+    // diseño, ver spec/features/009-meeting-ownership-sharing/plan.md).
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return {
+        success: false,
+        meetingId: null,
+        message: "No se pudo resolver el usuario autenticado para asignar la reunión.",
+        status: "error",
+      };
+    }
+
     // Validación básica de URL
     let parsedUrl: URL;
     try {
@@ -360,6 +381,7 @@ export const enqueueMeetingTool: ToolDefinition<EnqueueMeetingArgs, EnqueueMeeti
       botName: bot_name ?? "Squaads Bot",
       durationMinutes: duration_minutes ?? 60,
       status: "pending",
+      ownerId: session.user.id,
       createdAt: now,
       updatedAt: now,
     });
