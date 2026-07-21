@@ -5,7 +5,7 @@ import { startBot } from "@/bot/index";
 import { ADMISSION_TIMEOUT_ERROR_TAG } from "@/bot/providers/OnlineMeetingProvider";
 import { canTransitionStatus, type MeetingStatus } from "@meeting-bot/shared/domain/meetingStatus";
 import { StorageProviderFactory } from "@meeting-bot/shared/integrations/storage/StorageProviderFactory";
-import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
+import { buildNamedRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
 import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
 import {
   hasSummaryProvider,
@@ -102,13 +102,14 @@ async function processMeetingAsync({
       return { success: false, retryable: true };
     }
 
-    const storageKey = buildRecordingStorageKey(meetingId, meetingUrl, result.provider);
+    const storageKey = buildNamedRecordingStorageKey(meetingId, meetingBeforeRun?.name, now, meetingUrl, result.provider);
     const storage = StorageProviderFactory.getProvider();
     const uploadResult = await storage.uploadFile(outputPath, storageKey, "video/mp4");
 
     if (!hasTranscriptionProvider()) {
       await MeetingRepository.updateById(meetingId, {
         recordingFilePath: uploadResult.url,
+        recordingStorageKey: storageKey,
         status: "completed",
         updatedAt: new Date(),
         endsAt: now,
@@ -119,6 +120,7 @@ async function processMeetingAsync({
     await MeetingRepository.updateById(meetingId, {
       status: "transcribing",
       recordingFilePath: uploadResult.url,
+      recordingStorageKey: storageKey,
       updatedAt: new Date(),
       endsAt: now,
     });
