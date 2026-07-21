@@ -123,13 +123,22 @@ export class MeetingShareService {
     };
   }
 
-  static async createShare(input: CreateShareInput): Promise<ShareCreationResult> {
+  // callerId is optional so the API_ROUTE_SECRET-gated M2M route
+  // (/api/v1/shares, documented as session-independent) keeps working untouched;
+  // every session-based caller (app/actions/shares.ts) always supplies it.
+  static async createShare(input: CreateShareInput, callerId?: string): Promise<ShareCreationResult> {
     const meeting = await MeetingRepository.findById(input.meetingId);
     if (!meeting) {
       throw new Error("Meeting not found");
     }
+    if (callerId !== undefined && callerId !== meeting.ownerId) {
+      throw new Error("Only the meeting owner can share this meeting");
+    }
     if (meeting.status !== "completed") {
       throw new Error("Only completed meetings can be shared");
+    }
+    if ((input.shareType as string) === "public") {
+      throw new Error("Public shares are no longer supported");
     }
 
     const shareType = input.shareType;
@@ -204,10 +213,17 @@ export class MeetingShareService {
     }));
   }
 
-  static async revokeShare(shareId: string): Promise<void> {
+  // callerId is optional for the same M2M-route reason as createShare above.
+  static async revokeShare(shareId: string, callerId?: string): Promise<void> {
     const share = await MeetingShareRepository.findById(shareId);
     if (!share) {
       throw new Error("Share not found");
+    }
+    if (callerId !== undefined) {
+      const meeting = await MeetingRepository.findById(share.meetingId);
+      if (!meeting || callerId !== meeting.ownerId) {
+        throw new Error("Only the meeting owner can revoke this share");
+      }
     }
     await MeetingShareRepository.revokeById(shareId, new Date());
   }
