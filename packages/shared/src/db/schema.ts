@@ -36,6 +36,7 @@ export const meetingStatusEnum = pgEnum("meeting_status", [
   "completed",
   "admission_timeout",
   "error",
+  "transcription_error",
   "rejected",
 ]);
 

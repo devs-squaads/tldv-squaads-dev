@@ -164,8 +164,11 @@ async function processMeetingAsync({
       return { success: true, retryable: true };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown AI processing error";
+      // The recording already uploaded successfully — this is a recoverable post-processing
+      // failure (spec 010 Problem 3), not a full recording/join failure, so it must NOT collapse
+      // into generic "error" (which would hide the video and offer a destructive rejoin retry).
       await MeetingRepository.updateById(meetingId, {
-        status: "error",
+        status: "transcription_error",
         errorMessage: `La grabación se guardó, pero falló el procesamiento de IA: ${message}`,
         updatedAt: new Date(),
       });
