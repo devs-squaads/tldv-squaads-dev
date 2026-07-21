@@ -119,16 +119,28 @@ export const meetingShareAccessLogs = pgTable("meeting_share_access_logs", {
   accessedAt: timestamp("accessed_at", { withTimezone: true }).notNull(),
 }).enableRLS();
 
-export const meetingAccessGrants = pgTable("meeting_access_grants", {
-  id: text("id").primaryKey(),
-  meetingId: text("meeting_id").notNull(),
-  ownerId: text("owner_id").notNull(),
-  granteeUserId: text("grantee_user_id").notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }),
-  revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-}).enableRLS();
+export const meetingAccessGrants = pgTable(
+  "meeting_access_grants",
+  {
+    id: text("id").primaryKey(),
+    meetingId: text("meeting_id").notNull(),
+    ownerId: text("owner_id").notNull(),
+    granteeUserId: text("grantee_user_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    // Unconditional (NOT partial by revokedAt/expiresAt) — the idempotency contract is "at most
+    // one grant row ever exists per (meetingId, granteeUserId) pair, full stop", matching
+    // existsForMeetingAndGrantee's semantics (any row, revoked or not, counts as "already
+    // handled"). Arbiter for MeetingAccessGrantRepository.createDedupedForMeetingAndGrantee's
+    // ON CONFLICT DO NOTHING — same race class as meetings' source-event index (Problem 1),
+    // one layer up. See spec/features/010-auto-join-dedup-and-recovery/spec.md Problem 2.
+    uniqueIndex("meeting_access_grants_meeting_grantee_unique_idx").on(table.meetingId, table.granteeUserId),
+  ],
+).enableRLS();
 
 export const chatMessages = pgTable(
   "chat_messages",

@@ -1,6 +1,9 @@
+import { randomUUID } from "crypto";
 import { getConfiguredCalendarProvider } from "@/integrations/calendar/CalendarProviderRegistry";
 import { isSupportedMeetingUrl, normalizeMeetingUrl } from "@meeting-bot/shared/meetingProvider";
 import { CalendarAccountRepository } from "@meeting-bot/shared/repositories/CalendarAccountRepository";
+import { MeetingAccessGrantRepository } from "@meeting-bot/shared/repositories/MeetingAccessGrantRepository";
+import { UserRepository } from "@meeting-bot/shared/repositories/UserRepository";
 import { queueMeetingRun } from "@meeting-bot/shared/services/meetingQueueService";
 
 function parseNumberEnv(name: string, fallback: number): number {
@@ -70,7 +73,7 @@ export async function autoJoinPollAndEnqueue(): Promise<{ polled: number; enqueu
       : defaultDurationMinutes;
 
     const botName = process.env.BOT_DEFAULT_NAME || "Squaads Assistant";
-    await queueMeetingRun({
+    const { id: meetingId, ownerId: resolvedOwnerId } = await queueMeetingRun({
       meetingUrl: normalizedUrl,
       botName,
       duration,
@@ -83,6 +86,41 @@ export async function autoJoinPollAndEnqueue(): Promise<{ polled: number; enqueu
       endsAt: endsAt || undefined,
     });
     enqueued += 1;
+
+    // ADR-0007 exception: access is granted automatically here — unlike everywhere else in the
+    // codebase, where only the meeting Owner can trigger a share — because nobody consciously
+    // decided to record in this auto-join path, so "the Owner decides" has no one to apply to
+    // (the Owner itself was decided by which poll won the insert race, not by choice). Scoped
+    // only to auto-join meetings; manual paths (INVITE_BOT, dashboard/chat) stay suggestion-only.
+    for (const rawEmail of event.participantEmails ?? []) {
+      const email = rawEmail.trim().toLowerCase();
+      if (!email) continue;
+
+      try {
+        const user = await UserRepository.findByEmail(email);
+        if (!user || user.id === resolvedOwnerId) continue;
+
+        const alreadyGranted = await MeetingAccessGrantRepository.existsForMeetingAndGrantee(meetingId, user.id);
+        if (alreadyGranted) continue;
+
+        await MeetingAccessGrantRepository.createDedupedForMeetingAndGrantee({
+          id: randomUUID(),
+          meetingId,
+          ownerId: resolvedOwnerId,
+          granteeUserId: user.id,
+          expiresAt: null,
+          revokedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      } catch (error) {
+        // One participant's failure must not abort the rest of this event's attendees, nor the
+        // rest of the poll batch's events.
+        console.warn(
+          `[autoJoinService] Failed to grant access for participant ${email} on meeting ${meetingId}: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
   }
 
   return { polled: events.length, enqueued };

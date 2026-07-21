@@ -117,6 +117,58 @@ describe.skipIf(!dbAvailable)("MeetingAccessGrantRepository CRUD (requires `bun 
 
     await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "id" = ${grant.id}`);
   });
+
+  it("existsForMeetingAndGrantee returns false when no row matches the pair", async () => {
+    const suffix = crypto.randomUUID();
+    const result = await MeetingAccessGrantRepository.existsForMeetingAndGrantee(
+      `meeting-${suffix}`,
+      `grantee-${suffix}`,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("existsForMeetingAndGrantee returns true for a revoked row (idempotency — never silently re-created)", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix, { revokedAt: new Date() });
+    await MeetingAccessGrantRepository.create(grant);
+
+    const result = await MeetingAccessGrantRepository.existsForMeetingAndGrantee(grant.meetingId, grant.granteeUserId);
+    expect(result).toBe(true);
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "id" = ${grant.id}`);
+  });
+
+  it("createDedupedForMeetingAndGrantee: two concurrent calls for the same pair insert exactly one row", async () => {
+    const suffix = crypto.randomUUID();
+    const meetingId = `meeting-${suffix}`;
+    const granteeUserId = `grantee-${suffix}`;
+    const ownerId = `owner-${suffix}`;
+
+    const makeValues = (id: string) => ({
+      id,
+      meetingId,
+      ownerId,
+      granteeUserId,
+      expiresAt: null as Date | null,
+      revokedAt: null as Date | null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      MeetingAccessGrantRepository.createDedupedForMeetingAndGrantee(makeValues(`grant-a-${suffix}`)),
+      MeetingAccessGrantRepository.createDedupedForMeetingAndGrantee(makeValues(`grant-b-${suffix}`)),
+    ]);
+
+    expect(resultA.id).toBe(resultB.id);
+
+    const rows = await db.execute<{ id: string }>(
+      sql`SELECT id FROM "meeting_access_grants" WHERE "meeting_id" = ${meetingId} AND "grantee_user_id" = ${granteeUserId}`,
+    );
+    expect(rows.rows).toHaveLength(1);
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${meetingId}`);
+  });
 });
 
 /** Mirrors MeetingAccessGrantRepository.ts's `findLiveGrant()` WHERE clause verbatim. */
