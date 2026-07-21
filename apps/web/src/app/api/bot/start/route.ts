@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MeetingService } from "@/services/meetingService";
+import { UserRepository } from "@meeting-bot/shared/repositories/UserRepository";
 import { isKnownMeetingProvider, normalizeMeetingUrl, resolveMeetingProvider } from "@meeting-bot/shared/meetingProvider";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,18 @@ export async function POST(req: NextRequest) {
 
     if (provider && !isKnownMeetingProvider(provider)) {
       return NextResponse.json({ error: "provider must be one of: google-meet, microsoft-teams, zoom" }, { status: 400 });
+    }
+
+    // No session exists on this machine-to-machine route — the caller must
+    // supply an explicit resolvable identity to satisfy meetings.ownerId's
+    // NOT NULL constraint (see spec/features/009-meeting-ownership-sharing/plan.md).
+    const ownerEmail = typeof body.ownerEmail === "string" ? body.ownerEmail.trim() : "";
+    if (!ownerEmail) {
+      return NextResponse.json({ error: "ownerEmail is required" }, { status: 400 });
+    }
+    const owner = await UserRepository.findByEmail(ownerEmail);
+    if (!owner) {
+      return NextResponse.json({ error: "ownerEmail does not match a registered user" }, { status: 400 });
     }
 
     // Support single URL or multiple URLs (comma-separated string or array)
@@ -43,6 +56,7 @@ export async function POST(req: NextRequest) {
             botName,
             duration,
             provider,
+            ownerId: owner.id,
           });
           return { url: normalizedUrl, provider: resolvedProvider, meetingId: id, queued: true };
         } catch (err: unknown) {

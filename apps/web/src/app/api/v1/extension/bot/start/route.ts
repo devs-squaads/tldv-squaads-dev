@@ -42,6 +42,7 @@ export async function POST(req: NextRequest) {
             botName,
             duration,
             provider,
+            ownerId: auth.payload.userId,
           });
           return { url: normalizedUrl, provider: resolvedProvider, meetingId: id, queued: true };
         } catch (err: unknown) {

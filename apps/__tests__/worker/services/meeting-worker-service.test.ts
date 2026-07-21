@@ -34,10 +34,12 @@ interface HarnessOptions {
 function setupHarness(options: HarnessOptions) {
   const meeting: Record<string, unknown> = {
     id: "meeting-1",
+    name: null,
     status: "pending",
     recordingFilePath: null,
   };
   const updates: Array<Record<string, unknown>> = [];
+  const uploadFileCalls: Array<{ path: string; key: string; contentType?: string }> = [];
   let startBotCalls = 0;
 
   moduleMock.module("@/bot/index", () => ({
@@ -60,7 +62,10 @@ function setupHarness(options: HarnessOptions) {
   moduleMock.module("@meeting-bot/shared/integrations/storage/StorageProviderFactory", () => ({
     StorageProviderFactory: {
       getProvider: () => ({
-        uploadFile: async () => ({ url: UPLOADED_RECORDING_URL }),
+        uploadFile: async (path: string, key: string, contentType?: string) => {
+          uploadFileCalls.push({ path, key, contentType });
+          return { url: UPLOADED_RECORDING_URL };
+        },
       }),
     },
   }));
@@ -89,6 +94,7 @@ function setupHarness(options: HarnessOptions) {
   return {
     meeting,
     updates,
+    uploadFileCalls,
     getStartBotCalls: () => startBotCalls,
     importService: () =>
       import(`../../../worker/src/services/meetingWorkerService.ts?test=${Date.now()}`),
@@ -146,5 +152,30 @@ describe("processClaimedMeeting", () => {
     expect(result.processed).toBe(true);
     expect(harness.getStartBotCalls()).toBe(2);
     expect(harness.meeting.status).toBe("error");
+  });
+
+  it("persists a named recordingStorageKey using the meeting name and upload date", async () => {
+    process.env.WORKER_MAX_ATTEMPTS = "1";
+    process.env.WORKER_RETRY_BASE_MS = "1";
+
+    const harness = setupHarness({
+      startBot: async () => ({ success: true, provider: "google-meet" }),
+      transcribeRecording: async () => ({ text: "hello", segments: [] }),
+    });
+    harness.meeting.name = "Daily Standup";
+
+    const { processClaimedMeeting } = await harness.importService();
+
+    await processClaimedMeeting({
+      id: "meeting-1",
+      url: "https://meet.google.com/abc-defg-hij",
+      botName: "Squaads Assistant",
+      durationMinutes: 30,
+    });
+
+    const namedKeyPattern = /^google-meet\/daily-standup_\d{4}-\d{2}-\d{2}_meeting-1\.mp4$/;
+    expect(harness.uploadFileCalls).toHaveLength(1);
+    expect(harness.uploadFileCalls[0]?.key).toMatch(namedKeyPattern);
+    expect(harness.meeting.recordingStorageKey).toBe(harness.uploadFileCalls[0]?.key);
   });
 });

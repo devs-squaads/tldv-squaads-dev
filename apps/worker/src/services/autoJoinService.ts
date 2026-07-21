@@ -54,6 +54,16 @@ export async function autoJoinPollAndEnqueue(): Promise<{ polled: number; enqueu
     const notExpired = !endsAt || endsAt.getTime() > now.getTime();
     if (!eligibleByTime || !notExpired) continue;
 
+    // Events from the service-account fallback path (no OAuth-connected
+    // users) have no resolvable owner — skip rather than fabricate one
+    // (see spec/features/009-meeting-ownership-sharing/plan.md).
+    if (!event.ownerUserId) {
+      console.warn(
+        `[autoJoinService] Skipping event ${event.eventId} — no resolvable owner (service-account fallback has no users.id to attribute)`,
+      );
+      continue;
+    }
+
     const normalizedUrl = normalizeMeetingUrl(event.meetingUrl);
     const duration = startsAt && endsAt
       ? Math.max(1, Math.ceil((endsAt.getTime() - startsAt.getTime()) / 60_000))
@@ -64,6 +74,8 @@ export async function autoJoinPollAndEnqueue(): Promise<{ polled: number; enqueu
       meetingUrl: normalizedUrl,
       botName,
       duration,
+      ownerId: event.ownerUserId,
+      participantEmails: event.participantEmails,
       sourceProvider: event.provider,
       sourceEventId: event.eventId,
       organizerEmail: event.organizerEmail || undefined,

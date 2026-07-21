@@ -14,7 +14,7 @@ const ROLE_DESCRIPTIONS: Record<AuthorizedAccountRole, string> = {
  * Never injects meeting lists — those are fetched on-demand via search_meetings tool.
  */
 export async function buildUserContext(
-  input: { role?: AuthorizedAccountRole } = {},
+  input: { userId: string; role?: AuthorizedAccountRole },
 ): Promise<string> {
   const today = new Date().toLocaleDateString("es-AR", {
     weekday: "long",
@@ -28,7 +28,7 @@ export async function buildUserContext(
 
   try {
     const [meetings, settings] = await Promise.all([
-      WebMeetingRepository.listRecent(),
+      WebMeetingRepository.listRecent(input.userId),
       WebSettingsRepository.toRecord(),
     ]);
 
