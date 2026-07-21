@@ -27,12 +27,20 @@ Chain strategy: stacked-to-main
 
 ## Phase A1: Button placement wiring (PR-A)
 
-- [x] A1.1 `ChatMessages.tsx`: add `onSupportTopic?: () => void` to `ChatMessagesProps`; add `isSupport: true` to the Soporte entry in `STARTER_TOPICS` only (data field, never persisted).
-- [x] A1.2 `ChatMessages.tsx`: topic-card map `onClick` becomes `() => { onQuickReply(question, answer); if (isSupport) onSupportTopic?.(); }` (destructure `isSupport` per entry).
-- [x] A1.3 `ChatWidget.tsx`: add `const [showBugReport, setShowBugReport] = useState(false)`; pass `onSupportTopic={() => setShowBugReport(true)}` to `<ChatMessages>`.
-- [x] A1.4 `ChatWidget.tsx`: remove the unconditional `<ReportBugButton />` block (lines 234-236); render it conditionally (`{showBugReport && (...)}`) directly below the messages area, before the error banner (~line 158).
-- [x] A1.5 `ChatWidget.tsx`: add `const handleReset = () => { setShowBugReport(false); reset(); }`; point "Nueva conversación" `onClick` at `handleReset` instead of `reset`.
-- [x] A1.6 Manual verification (visual exception per AGENTS.md): starter state hides the button; Soporte click reveals it under the answer; a free-text-only thread never shows it; reset clears the flag and returns to starter topics. Matches spec.md's 3 PR-A scenarios. Verified via code trace (no browser tool in this session); recommend a quick human click-through before merge.
+> **Revised during implementation.** A1.1-A1.5 originally shipped an `onSupportTopic` callback +
+> `isSupport` flag + `useState` mechanism (as in the initial plan.md draft). The mandatory post-apply
+> bounded review (R3 Reliability) found that mechanism didn't survive `useChatStream`'s history restore on
+> reload — a real regression versus the pre-PR unconditional render. It was replaced with content-derived
+> visibility before merge; the callback/flag/data-field were deleted entirely. Checkboxes below describe
+> the actually-shipped mechanism.
+
+- [x] A1.1 New `apps/web/src/components/chat/chatWidget.logic.ts`: export `SUPPORT_TOPIC_MARKER = "Reportar un problema"` and `hasSupportTopicMarker(messages): boolean` (pure `.some()` over assistant-role messages containing the marker).
+- [x] A1.2 `ChatWidget.tsx`: `const showBugReport = hasSupportTopicMarker(messages) || manualReveal;` — no callback prop passed to `<ChatMessages>`, no `isSupport` field on `STARTER_TOPICS`.
+- [x] A1.3 `apps/__tests__/web/components/chat/chat-widget.logic.test.ts` (new, TDD-mandatory): 4 cases — empty list, restored assistant marker, user-role marker (role-gated false), assistant without marker.
+- [x] A1.4 `ChatWidget.tsx`: remove the unconditional `<ReportBugButton />` block; render it conditionally (`{showBugReport && (...)}`) directly below the messages area, before the error banner.
+- [x] A1.5 `ChatWidget.tsx`: `handleReset` calls `reset()`; derived visibility naturally resolves to hidden once `messages` is empty.
+- [x] A1.6 Manual verification (visual exception per AGENTS.md): starter state hides the button; Soporte click reveals it under the answer; a free-text-only thread never shows it; reset returns to starter topics with the button hidden; **a page reload with a Soporte-containing restored history shows the button again** (the regression this revision fixes). Verified via code trace across `ChatWidget.tsx`/`ChatMessages.tsx`/`useChatStream.ts`; recommend a quick human click-through before merge.
+- [x] A1.7 (added after R4 Resilience finding) `ChatWidget.tsx`: `manualReveal` state + a persistent "¿Necesitás reportar un problema?" link next to "Nueva conversación", shown when `messages.length > 0 && !showBugReport`; `handleReset` clears it. Closes the gap where a restored conversation without the marker had no button-reachable path except losing history via reset.
 
 ## Phase A2: Spanish voseo copy (TDD-mandatory)
 

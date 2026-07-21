@@ -6,16 +6,20 @@ Two sequential PRs, both web-only content/UI changes plus one shared-domain expo
 
 ## PR-A — Button + copy
 
-### Wiring the `showBugReport` flag (binding: no topic-id pipeline)
+### Visibility mechanism (revised during apply — see below)
 
-`onQuickReply(question, answer)` carries no topic identity, and `DisplayMessage` must not grow one. Smallest viable wiring: a second, optional callback that only the Soporte card fires.
+Initial design (superseded): an `onSupportTopic?: () => void` callback fired only by the Soporte card, flipping a local `showBugReport` `useState(false)` flag in `ChatWidget.tsx`. **Rejected during implementation**: the mandatory post-apply bounded review (R3 Reliability) found that ephemeral state doesn't survive `useChatStream`'s localStorage/DB history restore on mount — after a reload, the restored Soporte answer (which tells the user the button is right below it) would render with no button, a regression versus the pre-PR unconditional render.
 
-- `ChatMessages.tsx`: add `onSupportTopic?: () => void` to `ChatMessagesProps`. Mark the Soporte entry in `STARTER_TOPICS` with `isSupport: true` (data field on the const, never persisted). In the card map: `onClick={() => { onQuickReply(question, answer); if (isSupport) onSupportTopic?.(); }}`.
-- `ChatWidget.tsx`: `const [showBugReport, setShowBugReport] = useState(false)`; pass `onSupportTopic={() => setShowBugReport(true)}`.
+**Shipped mechanism** — visibility derived from message content, not component state:
+
+- New `apps/web/src/components/chat/chatWidget.logic.ts` exports `SUPPORT_TOPIC_MARKER = "Reportar un problema"` and `hasSupportTopicMarker(messages): boolean` — a pure `.some()` check for an assistant-role message containing that literal substring (the same text the Soporte answer renders, so it's present in exactly the restored/cached content).
+- `ChatWidget.tsx`: `const showBugReport = hasSupportTopicMarker(messages) || manualReveal;` — no `onSupportTopic` callback, no `isSupport` field on `STARTER_TOPICS`; both were deleted as unnecessary once visibility became content-derived.
+- **Manual escape hatch** (`manualReveal`, added after a second review pass flagged an R4 Resilience gap): a restored conversation whose history never reached Soporte has no way to reveal the button without resetting (losing history). A small always-visible link, "¿Necesitás reportar un problema?", next to "Nueva conversación", sets a local `manualReveal` flag (session-scoped, no backend needed) that OR's into `showBugReport`. The content-derived path still auto-recovers on restore; this is purely an additional manual path, so it does not reintroduce the original restore bug.
+- `chatWidget.logic.ts` carries a `ponytail:` comment on the string-coupling tradeoff; `ChatMessages.tsx`'s Soporte answer carries a reciprocal comment pinning the exact substring `SUPPORT_TOPIC_MARKER` depends on.
 
 ### Render position (post-move)
 
-Remove the unconditional block at `ChatWidget.tsx:234-236`. Render conditionally directly below the messages area (line ~158, before the error banner), so the button sits visually under the Soporte answer:
+Removed the unconditional block that used to sit at the bottom of the panel. Renders conditionally directly below the messages area, before the error banner, so the button sits visually under the Soporte answer:
 
 ```tsx
 {showBugReport && (
@@ -25,7 +29,7 @@ Remove the unconditional block at `ChatWidget.tsx:234-236`. Render conditionally
 
 ### Reset behavior
 
-Wrap the "Nueva conversación" handler: `const handleReset = () => { setShowBugReport(false); reset(); }` and point the button's `onClick` at it. Reset → messages cleared → `STARTER_TOPICS` starter state returns (renders when `messages.length === 0`), flag cleared. Flag is session-scoped in-memory state; closing the panel keeps it (accepted per grill decision).
+`handleReset` clears `manualReveal` and calls `reset()`. Reset → messages cleared → `STARTER_TOPICS` starter state returns (renders when `messages.length === 0`); `hasSupportTopicMarker([])` is `false`, so the derived path also drops the button. Nothing is session-scoped beyond `manualReveal`; closing the panel keeps state (accepted per grill decision).
 
 ### The 9 string translations (voseo)
 
@@ -72,8 +76,10 @@ Consumption in `definitions.ts` (`searchMeetingsTool`): `enum: [...MEETING_STATU
 
 | File | PR | Action |
 |---|---|---|
-| `apps/web/src/components/chat/ChatWidget.tsx` | A | flag, conditional render, handleReset |
-| `apps/web/src/components/chat/ChatMessages.tsx` | A+B | A: `onSupportTopic`, Soporte answer; B: 2 topic answers |
+| `apps/web/src/components/chat/ChatWidget.tsx` | A | derived visibility, manual reveal escape hatch, conditional render, handleReset |
+| `apps/web/src/components/chat/chatWidget.logic.ts` | A | `SUPPORT_TOPIC_MARKER`, `hasSupportTopicMarker` (new) |
+| `apps/__tests__/web/components/chat/chat-widget.logic.test.ts` | A | derivation unit tests (new) |
+| `apps/web/src/components/chat/ChatMessages.tsx` | A+B | A: Soporte answer + marker comment; B: 2 topic answers |
 | `apps/web/src/components/bug-report/ReportBugButton.tsx` | A | 6 strings |
 | `apps/web/src/components/bug-report/reportBugButton.logic.ts` | A | 3 strings |
 | `apps/__tests__/web/components/report-bug-button.logic.test.ts` | A | Spanish literal assertions (test-first) |
@@ -90,7 +96,8 @@ Consumption in `definitions.ts` (`searchMeetingsTool`): `enum: [...MEETING_STATU
 | Unit (PR-A, RED first) | `reportBugButton.logic.ts` returns Spanish strings | Update literal assertions before translating |
 | Unit (PR-B, RED first) | `MEETING_STATUSES` contains all 11 statuses incl. `transcription_error`; label lookup works for every array member | New `apps/__tests__/shared/domain/meeting-status.test.ts` |
 | Unit (PR-B, RED first) | `searchMeetingsTool.parameters.properties.status.enum` equals `MEETING_STATUSES` | Extend `chat-tools-definitions.test.ts` |
-| Visual (exception) | Button renders only after Soporte click; cleared on reset | Manual — per AGENTS.md pure-visual UI exception; no component tests exist for this area |
+| Unit (PR-A, added after review) | `hasSupportTopicMarker` — empty list, restored marker, role-gating, no-marker cases | `apps/__tests__/web/components/chat/chat-widget.logic.test.ts` |
+| Visual (exception) | Button renders after Soporte click or restore; manual escape hatch reveals it; cleared on reset | Manual — per AGENTS.md pure-visual UI exception; no component tests exist for this area |
 
 ## Threat Matrix
 

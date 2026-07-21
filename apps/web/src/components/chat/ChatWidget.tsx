@@ -12,9 +12,12 @@ import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
 
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
+  // Manual escape hatch: covers a restored conversation whose history never
+  // reached Soporte — reveals the button without losing history or needing the backend.
+  const [manualReveal, setManualReveal] = useState(false);
   const { messages, suggestions, isLoading, error, activeToolCall, sendMessage, addQuickReply, reset } =
     useChatStream();
-  const showBugReport = hasSupportTopicMarker(messages);
+  const showBugReport = hasSupportTopicMarker(messages) || manualReveal;
   const normalizedError = error?.toLowerCase() ?? "";
   const isTokenError =
     /token|quota|rate limit|429|credit|crédito|l[ií]mite/.test(normalizedError);
@@ -57,6 +60,7 @@ export function ChatWidget() {
   }
 
   function handleReset() {
+    setManualReveal(false);
     reset();
   }
 
@@ -228,10 +232,10 @@ export function ChatWidget() {
           <ChatInput onSend={sendMessage} disabled={isLoading} />
         </div>
 
-        {/* Reset conversation link */}
+        {/* Reset conversation + manual report-a-problem escape hatch */}
         {messages.length > 0 && !isLoading && (
           <div
-            className="flex justify-center pb-2"
+            className="flex justify-center items-center gap-3 pb-2"
             style={{ borderTop: "1px solid var(--glass-border)" }}
           >
             <button
@@ -241,6 +245,15 @@ export function ChatWidget() {
             >
               Nueva conversación
             </button>
+            {!showBugReport && (
+              <button
+                type="button"
+                onClick={() => setManualReveal(true)}
+                className="py-1.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+              >
+                ¿Necesitás reportar un problema?
+              </button>
+            )}
           </div>
         )}
       </div>

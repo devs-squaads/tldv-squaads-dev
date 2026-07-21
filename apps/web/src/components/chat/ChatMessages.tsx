@@ -250,6 +250,8 @@ Todo se guarda en PostgreSQL. Los archivos de video/audio van a S3/MinIO.`,
     icon: HeadphonesIcon,
     label: "Soporte",
     question: "¿Cómo puedo contactar al equipo de soporte?",
+    // ponytail: the literal "Reportar un problema" below is SUPPORT_TOPIC_MARKER's
+    // match target in chatWidget.logic.ts — rewording it hides the report button.
     answer: `¿No encontrás lo que buscás o algo no está funcionando como esperás?
 
 **Lo que podés hacer ahora:**

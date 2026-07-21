@@ -19,13 +19,17 @@ PRs, each under the 400-line budget.
 
 ## PR-A — Report button placement + Spanish copy
 
-### Requirement: ReportBugButton renders only after a Soporte topic-card click
+### Requirement: ReportBugButton renders only after reaching Soporte (content-derived, no topic-id pipeline)
 
-The system MUST render `ReportBugButton` inside the chat panel ONLY after the user clicks the Soporte
-topic card. Placement MUST be driven by a local `showBugReport` flag in `ChatWidget.tsx` (no topic-id
-pipeline, no intent detection). `reset()` MUST clear the flag. The button MUST NOT appear in the starter
-state or during an unrelated free-text conversation. *(Visual-exception: button placement/rendering is
-validated manually per the repo's visual-UI TDD exception.)*
+The system MUST render `ReportBugButton` inside the chat panel ONLY once the Soporte answer is present in
+the conversation. Visibility MUST be derived from message content (`hasSupportTopicMarker`, matching the
+literal "Reportar un problema" substring in an assistant message) rather than from ephemeral component
+state — a local flag alone does not survive `useChatStream`'s localStorage/DB history restore on reload,
+which was found and corrected during implementation via the mandatory post-apply bounded review. No
+topic-id pipeline, no intent detection. `reset()` MUST clear conversation state so the derived visibility
+returns to hidden. The button MUST NOT appear in the starter state or during an unrelated free-text
+conversation that never reached Soporte. *(Visual-exception: button placement/rendering is validated
+manually per the repo's visual-UI TDD exception; the derivation predicate itself is unit-tested.)*
 
 #### Scenario: Soporte click reveals the button and the corrected answer
 
@@ -40,12 +44,37 @@ validated manually per the repo's visual-UI TDD exception.)*
 - WHEN messages exist in the thread
 - THEN the "Reportar un problema" button MUST NOT be visible
 
+#### Scenario: Button visibility survives a page reload
+
+- GIVEN the user clicked Soporte and the button is visible
+- WHEN the page reloads and `useChatStream` restores the conversation from cache/DB
+- THEN the Soporte answer is restored
+- AND the "Reportar un problema" button is visible again (not lost, since visibility derives from the
+  restored message content, not from ephemeral state)
+
 #### Scenario: Reset returns to starter state with the button hidden
 
 - GIVEN Soporte was clicked and the button is visible
 - WHEN the user resets the conversation
 - THEN the starter topics render again
-- AND the `showBugReport` flag is cleared so the button is hidden
+- AND the derived visibility (and the manual reveal flag, see below) resolve to hidden
+
+### Requirement: A manual escape hatch reveals the button without losing history
+
+The system MUST offer a persistent, always-visible manual link ("¿Necesitás reportar un problema?", next
+to "Nueva conversación") that reveals the button in-session without resetting the conversation or
+requiring backend availability, for the case where a restored conversation's history never reached
+Soporte. This closes an R4 Resilience gap found during the mandatory bounded review: before this PR the
+button was unconditionally visible; after moving it behind content-derivation, a restored conversation
+without the marker had no button-reachable path except losing history via reset.
+
+#### Scenario: Manual reveal works without losing history or the backend
+
+- GIVEN a restored conversation has messages but none reference Soporte
+- WHEN the user clicks "¿Necesitás reportar un problema?"
+- THEN the "Reportar un problema" button becomes visible
+- AND the existing conversation history is preserved
+- AND no network request was required to reveal it
 
 ### Requirement: All ReportBugButton copy is Spanish (voseo)
 
@@ -127,7 +156,8 @@ the enum export and its consumption — test-first.)*
 
 - No i18n layer — direct string-literal edits only (no framework introduced).
 - No full 18-doc corpus audit — only 009/010 deltas + the two confirmed falsehoods.
-- No intent-detection or topic-id pipeline for button placement — local flag only.
+- No intent-detection or topic-id pipeline for button placement — content-derived visibility plus a
+  manual reveal escape hatch only.
 - No app-wide voseo/tuteo normalization (`MeetingDetailsView` tuteo stays as-is).
 - No `roadmap.md` refresh (known stale — separate follow-up).
 - No change to `manage_meeting_share` behavior (tool already correct; only copy was wrong).
