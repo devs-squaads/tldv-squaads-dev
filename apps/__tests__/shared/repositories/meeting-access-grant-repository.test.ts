@@ -1,178 +1,14 @@
-import { describe, expect, it, mock, beforeEach, afterAll } from "bun:test";
-import { mockDrizzleOrmModule, mockDbSchemaModule } from "../../helpers/dbSchemaMock";
+import { describe, expect, it, afterAll } from "bun:test";
 import { createLiveConnection, sql } from "@meeting-bot/shared/db/liveConnection";
 
-type GrantRow = {
-  id: string;
-  meetingId: string;
-  ownerId: string;
-  granteeUserId: string;
-  expiresAt: Date | null;
-  revokedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type QueryState = {
-  rows: GrantRow[];
-  insertCalls: GrantRow[];
-  updateCalls: Array<{ data: Record<string, unknown> }>;
-};
-
-const state: QueryState = { rows: [], insertCalls: [], updateCalls: [] };
-
-function resetState() {
-  state.rows = [];
-  state.insertCalls = [];
-  state.updateCalls = [];
-}
-
-// where()/limit()/orderBy() intentionally ignore the condition's shape (see
-// apps/__tests__/helpers/dbSchemaMock.ts) — each test sets `state.rows` to
-// exactly the row(s) relevant to that scenario. This mock proves the
-// repository calls the right chain and shapes results correctly; it cannot
-// prove the real expiry/revocation SQL predicate filters rows on real
-// Postgres — that's covered by the live-DB block below.
-const dbMock = {
-  select() {
-    return {
-      from() {
-        return {
-          where() {
-            return {
-              limit: (n: number) => Promise.resolve(state.rows.slice(0, n)),
-              orderBy: () => Promise.resolve(state.rows),
-            };
-          },
-        };
-      },
-    };
-  },
-  insert() {
-    return {
-      values: (values: GrantRow) => {
-        state.insertCalls.push(values);
-        state.rows.push(values);
-        return Promise.resolve();
-      },
-    };
-  },
-  update() {
-    return {
-      set(data: Record<string, unknown>) {
-        return {
-          where: () => {
-            state.updateCalls.push({ data });
-            return Promise.resolve();
-          },
-        };
-      },
-    };
-  },
-};
-
-const bunMock = mock as typeof mock & {
-  module: (specifier: string, factory: () => unknown) => void;
-};
-
-// These two specifiers must stay in sync with every other repository test's
-// mock — bun's mock.module() resolves per process, not per file.
-bunMock.module("drizzle-orm", mockDrizzleOrmModule);
-bunMock.module("@meeting-bot/shared/db/schema", mockDbSchemaModule);
-bunMock.module("@meeting-bot/shared/db", () => ({ db: dbMock }));
-
-const { MeetingAccessGrantRepository } = await import(
-  "../../../../packages/shared/src/repositories/MeetingAccessGrantRepository"
-);
-
-function makeGrant(overrides: Partial<GrantRow> = {}): GrantRow {
-  const now = new Date();
-  return {
-    id: "grant-1",
-    meetingId: "meeting-1",
-    ownerId: "owner-1",
-    granteeUserId: "grantee-1",
-    expiresAt: null,
-    revokedAt: null,
-    createdAt: now,
-    updatedAt: now,
-    ...overrides,
-  };
-}
-
-describe("MeetingAccessGrantRepository", () => {
-  beforeEach(() => {
-    resetState();
-  });
-
-  describe("create", () => {
-    it("inserts a new grant row", async () => {
-      const grant = makeGrant();
-      await MeetingAccessGrantRepository.create(grant);
-
-      expect(state.insertCalls).toHaveLength(1);
-      expect(state.insertCalls[0]?.id).toBe("grant-1");
-    });
-  });
-
-  describe("findById", () => {
-    it("returns null when no grant matches the id", async () => {
-      const result = await MeetingAccessGrantRepository.findById("nope");
-      expect(result).toBeNull();
-    });
-
-    it("returns the matching grant when one exists", async () => {
-      state.rows = [makeGrant()];
-      const result = await MeetingAccessGrantRepository.findById("grant-1");
-      expect(result?.id).toBe("grant-1");
-    });
-  });
-
-  describe("listByMeetingId", () => {
-    it("returns every grant for a meeting", async () => {
-      state.rows = [makeGrant({ id: "grant-1" }), makeGrant({ id: "grant-2" })];
-      const result = await MeetingAccessGrantRepository.listByMeetingId("meeting-1");
-      expect(result.map((r) => r.id)).toEqual(["grant-1", "grant-2"]);
-    });
-  });
-
-  describe("findLiveGrant", () => {
-    it("returns null when no grant row exists", async () => {
-      const result = await MeetingAccessGrantRepository.findLiveGrant("meeting-1", "grantee-1");
-      expect(result).toBeNull();
-    });
-
-    it("returns the grant row when one exists", async () => {
-      state.rows = [makeGrant()];
-      const result = await MeetingAccessGrantRepository.findLiveGrant("meeting-1", "grantee-1");
-      expect(result?.granteeUserId).toBe("grantee-1");
-    });
-  });
-
-  describe("revokeById", () => {
-    it("sets revokedAt and updatedAt", async () => {
-      const when = new Date("2026-01-01T00:00:00Z");
-      await MeetingAccessGrantRepository.revokeById("grant-1", when);
-
-      expect(state.updateCalls).toHaveLength(1);
-      expect(state.updateCalls[0]?.data.revokedAt).toBe(when);
-      expect(state.updateCalls[0]?.data.updatedAt).toBe(when);
-    });
-  });
-});
-
-// Live-DB: findLiveGrant's expiry/revocation predicate is a boolean SQL
-// condition (IS NULL + OR + timestamp comparison) — the mock above can't
-// prove it actually filters rows on real Postgres (mirrors the WHERE-clause
-// verification style used for WebMeetingRepository's visibility rule).
-// Auto-skips when no DB is reachable so `bun test` still passes without
-// `infra:up`.
-//
-// This block intentionally avoids `@meeting-bot/shared/db`, `@meeting-bot/shared/db/schema`,
-// and the real `MeetingAccessGrantRepository` — those exact specifiers are
-// globally overridden by the `mock.module()` calls above for the rest of
-// this process, so importing the repository again here would just exercise
-// the in-memory mock, not real Postgres.
+// Live-DB only: this repository's `db` import is the shared
+// `@meeting-bot/shared/db` specifier, which other repository tests mock at
+// the module level. Bun's `mock.module()` only honors the first registration
+// per specifier per test process (not per file), so a second file mocking
+// the same specifier silently loses to whichever file's registration ran
+// first — an outcome that varies by test-discovery order between OSes (this
+// broke in CI while passing locally). Using a real connection instead of
+// racing for the mock avoids the collision entirely.
 const CONNECTION_STRING = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/meeting_bot";
 const { pool, db } = createLiveConnection(CONNECTION_STRING);
 
@@ -189,6 +25,99 @@ async function canConnect(): Promise<boolean> {
 }
 
 const dbAvailable = await canConnect();
+
+const { MeetingAccessGrantRepository } = await import(
+  "../../../../packages/shared/src/repositories/MeetingAccessGrantRepository"
+);
+
+function makeGrant(suffix: string, overrides: Partial<{
+  id: string;
+  meetingId: string;
+  ownerId: string;
+  granteeUserId: string;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+}> = {}) {
+  const now = new Date();
+  return {
+    id: `grant-${suffix}`,
+    meetingId: `meeting-${suffix}`,
+    ownerId: `owner-${suffix}`,
+    granteeUserId: `grantee-${suffix}`,
+    expiresAt: null as Date | null,
+    revokedAt: null as Date | null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+describe.skipIf(!dbAvailable)("MeetingAccessGrantRepository CRUD (requires `bun run infra:up`)", () => {
+  it("inserts a new grant row and finds it by id", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix);
+
+    await MeetingAccessGrantRepository.create(grant);
+    const found = await MeetingAccessGrantRepository.findById(grant.id);
+
+    expect(found?.id).toBe(grant.id);
+    expect(found?.granteeUserId).toBe(grant.granteeUserId);
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "id" = ${grant.id}`);
+  });
+
+  it("returns null when no grant matches the id", async () => {
+    const result = await MeetingAccessGrantRepository.findById(`nope-${crypto.randomUUID()}`);
+    expect(result).toBeNull();
+  });
+
+  it("returns every grant for a meeting", async () => {
+    const suffix = crypto.randomUUID();
+    const meetingId = `meeting-${suffix}`;
+    const grantA = makeGrant(suffix, { id: `grant-a-${suffix}`, meetingId });
+    const grantB = makeGrant(`${suffix}-b`, { id: `grant-b-${suffix}`, meetingId });
+
+    await MeetingAccessGrantRepository.create(grantA);
+    await MeetingAccessGrantRepository.create(grantB);
+
+    const result = await MeetingAccessGrantRepository.listByMeetingId(meetingId);
+
+    expect(result.map((r) => r.id).sort()).toEqual([grantA.id, grantB.id].sort());
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${meetingId}`);
+  });
+
+  it("findLiveGrant returns null when no grant row exists", async () => {
+    const suffix = crypto.randomUUID();
+    const result = await MeetingAccessGrantRepository.findLiveGrant(`meeting-${suffix}`, `grantee-${suffix}`);
+    expect(result).toBeNull();
+  });
+
+  it("findLiveGrant returns the grant row when one exists", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix);
+    await MeetingAccessGrantRepository.create(grant);
+
+    const result = await MeetingAccessGrantRepository.findLiveGrant(grant.meetingId, grant.granteeUserId);
+    expect(result?.granteeUserId).toBe(grant.granteeUserId);
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "id" = ${grant.id}`);
+  });
+
+  it("revokeById sets revokedAt", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix);
+    await MeetingAccessGrantRepository.create(grant);
+    const when = new Date("2026-01-01T00:00:00Z");
+
+    await MeetingAccessGrantRepository.revokeById(grant.id, when);
+    const found = await MeetingAccessGrantRepository.findById(grant.id);
+
+    expect(found?.revokedAt?.toISOString()).toBe(when.toISOString());
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "id" = ${grant.id}`);
+  });
+});
 
 /** Mirrors MeetingAccessGrantRepository.ts's `findLiveGrant()` WHERE clause verbatim. */
 async function hasLiveGrant(meetingId: string, granteeUserId: string): Promise<boolean> {
