@@ -125,7 +125,7 @@ describe("processClaimedMeeting", () => {
     expect(result.processed).toBe(true);
     expect(harness.getStartBotCalls()).toBe(1);
     expect(harness.meeting.recordingFilePath).toBe(UPLOADED_RECORDING_URL);
-    expect(harness.meeting.status).toBe("error");
+    expect(harness.meeting.status).toBe("transcription_error");
 
     const statuses = harness.updates.map((update) => update.status).filter(Boolean);
     expect(statuses).not.toContain("pending");

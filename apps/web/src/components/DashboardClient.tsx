@@ -42,6 +42,9 @@ function getStatusVariant(status: MeetingStatus) {
     case "completed": return "success";
     case "error": return "destructive";
     case "rejected": return "destructive";
+    // Recording is fine here — only post-processing needs a retry — so this gets a distinct,
+    // less alarming variant from plain "error" (spec 010 Problem 3).
+    case "transcription_error": return "warning";
     case "recording":
     case "transcribing":
     case "summarizing": return "warning";
@@ -85,7 +88,7 @@ export function DashboardClient({ meetings }: { meetings: Meeting[] }) {
       statusFilter === "all" ||
       (statusFilter === "completed" && m.status === "completed") ||
       (statusFilter === "in_progress" && ACTIVE_PROCESSING_STATUSES.includes(m.status)) ||
-      (statusFilter === "error" && m.status === "error") ||
+      (statusFilter === "error" && (m.status === "error" || m.status === "transcription_error")) ||
       (statusFilter === "rejected" && m.status === "rejected");
 
     const matchesDate =

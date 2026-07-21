@@ -8,7 +8,8 @@ export type MeetingStatus =
   | "completed"
   | "admission_timeout"
   | "rejected"
-  | "error";
+  | "error"
+  | "transcription_error";
 
 const ALLOWED_TRANSITIONS: Record<MeetingStatus, ReadonlyArray<MeetingStatus>> = {
   pending: ["joining", "error"],
@@ -21,6 +22,9 @@ const ALLOWED_TRANSITIONS: Record<MeetingStatus, ReadonlyArray<MeetingStatus>> =
   admission_timeout: ["pending"],
   rejected: ["pending"],
   error: [],
+  // Recoverable, unlike error/rejected: the recording is already saved, only the AI
+  // post-processing pass failed, so it can retry from storage without rejoining the meeting.
+  transcription_error: ["transcribing", "summarizing", "completed"],
 };
 
 export const ACTIVE_PROCESSING_STATUSES: ReadonlyArray<MeetingStatus> = [
@@ -43,6 +47,7 @@ const MEETING_STATUS_LABELS_ES: Record<MeetingStatus, string> = {
   admission_timeout: "Tiempo de admisión agotado",
   rejected: "Rechazada",
   error: "Error",
+  transcription_error: "Error de transcripción",
 };
 
 export function canTransitionStatus(from: MeetingStatus, to: MeetingStatus): boolean {
