@@ -44,9 +44,12 @@ superficies (widget flotante dentro del Meet, popup) que deben coincidir siempre
 
 **Meeting Status**:
 El estado canónico del ciclo de vida de un bot de reunión (`pending`, `joining`, `waiting_admission`,
-`recording`, `transcribing`, `summarizing`, `completed`, o terminal de fallo). El backend (Supabase vía
+`recording`, `transcribing`, `summarizing`, `completed`, o un estado de fallo). El backend (Supabase vía
 web API) es la única fuente de verdad; cualquier valor retenido en el cliente es una caché cálida, no
-dato canónico.
+dato canónico. No todo estado de fallo es terminal: `error`/`rejected`/`admission_timeout` sí lo son
+(exigen volver a `pending` para reintentar desde cero), pero `transcription_error` es recuperable — la
+grabación ya está guardada y solo falló el post-proceso de IA, así que puede volver a `transcribing`/
+`summarizing`/`completed` sin re-unirse a la reunión.
 _Avoid_: meeting state (genérico), status value.
 
 **Single Poller**:
@@ -90,3 +93,14 @@ real, el enlace se comparte manualmente).
 _Avoid_: attendee (usar "Participant" en el dominio de la app; "attendee" es el campo crudo de la API de
 Calendar), participants count (la cuenta de presencia en vivo del DOM de Meet — dato distinto, ya usado
 internamente en `GoogleMeet.ts` para detectar si el bot está solo).
+
+**Auto-Join Co-Attendee Grant** (excepción, ver ADR-0007):
+Único caso donde un `Access Grant` se crea sin acción del `Owner`. Aplica solo cuando la reunión se
+originó por auto-join de calendario (no por `INVITE_BOT` ni por encolado manual desde el dashboard/chat):
+si un `Participant` del mismo evento matchea el `users.email` de otro usuario registrado, ese usuario
+recibe `Access Grant` automático apenas se crea la reunión. Razón: en auto-join nadie tomó la decisión
+consciente de grabar, así que "el Owner decide compartir" no tiene a quién aplicarle — el Owner mismo
+salió sorteado por una carrera de pollers, no por elección. Para reuniones manuales, `Participant` sigue
+siendo solo sugerencia (sin cambios).
+_Avoid_: usar "Access Grant" a secas para este caso sin aclarar que es la excepción automática — el
+`Access Grant` normal siempre lo dispara el `Owner`.
