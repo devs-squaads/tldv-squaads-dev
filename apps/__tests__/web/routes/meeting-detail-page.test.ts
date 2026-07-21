@@ -37,9 +37,17 @@ function setupHarness(meetingOverrides: Record<string, unknown>) {
   };
   const signCalls: string[] = [];
 
-  moduleMock.module("@meeting-bot/shared/repositories/MeetingRepository", () => ({
-    MeetingRepository: {
-      findById: async () => ({ ...meeting }),
+  moduleMock.module("next-auth", () => ({
+    getServerSession: async () => ({ user: { id: "user-1" } }),
+  }));
+
+  moduleMock.module("@/auth", () => ({
+    authOptions: {},
+  }));
+
+  moduleMock.module("@/repositories/WebMeetingRepository", () => ({
+    WebMeetingRepository: {
+      findByIdForUser: async () => ({ ...meeting }),
     },
   }));
 
