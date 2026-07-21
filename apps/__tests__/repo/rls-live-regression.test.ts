@@ -68,13 +68,20 @@ describe.skipIf(!dbAvailable)("RLS live regression (requires `bun run infra:up`)
   it("meetings: RLS enabled, Drizzle still reads/writes", async () => {
     await expectRlsEnabled("meetings");
 
+    // meetings.owner_id is NOT NULL (009 Phase 1) — needs a real users row.
+    const ownerId = crypto.randomUUID();
+    await db.execute(
+      sql`INSERT INTO "users" ("id", "email", "created_at", "updated_at") VALUES (${ownerId}, ${`${ownerId}@rls-regression.test`}, now(), now())`,
+    );
+
     const id = crypto.randomUUID();
     await db.execute(
-      sql`INSERT INTO "meetings" ("id", "url", "created_at", "updated_at") VALUES (${id}, ${"https://meet.google.com/rls-regression"}, now(), now())`,
+      sql`INSERT INTO "meetings" ("id", "url", "owner_id", "created_at", "updated_at") VALUES (${id}, ${"https://meet.google.com/rls-regression"}, ${ownerId}, now(), now())`,
     );
     const found = await db.execute(sql`SELECT id FROM "meetings" WHERE id = ${id}`);
     expect(found.rows).toHaveLength(1);
     await db.execute(sql`DELETE FROM "meetings" WHERE id = ${id}`);
+    await db.execute(sql`DELETE FROM "users" WHERE id = ${ownerId}`);
   });
 
   it("settings: RLS enabled, Drizzle still reads/writes", async () => {
@@ -93,8 +100,9 @@ describe.skipIf(!dbAvailable)("RLS live regression (requires `bun run infra:up`)
     const id = crypto.randomUUID();
     const meetingId = crypto.randomUUID();
     const tokenHash = crypto.randomUUID();
+    // share_type enum dropped "public" (009 Phase 1) — only "restricted_email" remains.
     await db.execute(
-      sql`INSERT INTO "meeting_shares" ("id", "meeting_id", "share_type", "token_hash", "created_at", "updated_at") VALUES (${id}, ${meetingId}, ${"public"}, ${tokenHash}, now(), now())`,
+      sql`INSERT INTO "meeting_shares" ("id", "meeting_id", "share_type", "token_hash", "created_at", "updated_at") VALUES (${id}, ${meetingId}, ${"restricted_email"}, ${tokenHash}, now(), now())`,
     );
     const found = await db.execute(sql`SELECT id FROM "meeting_shares" WHERE id = ${id}`);
     expect(found.rows).toHaveLength(1);

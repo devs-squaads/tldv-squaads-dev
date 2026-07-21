@@ -9,11 +9,11 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR1 → {PR2, PR3, PR4, PR7 parallel} → {PR5 → PR6} |
 | Delivery strategy | ask-on-risk (default, none supplied) |
-| Chain strategy | pending — user decision needed |
+| Chain strategy | feature-branch-chain (resolved — confirmed by branch structure: `feat/009-02-owner-capture` created off `feat/009-01-schema`, off tracker `feat/009-meeting-ownership-sharing`) |
 
-Decision needed before apply: Yes
+Decision needed before apply: No — resolved as feature-branch-chain
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Suggested Work Units
@@ -39,12 +39,19 @@ PR2/PR4 sit near the 400-line edge; split further at apply time if actual diff o
 
 ## Phase 2: Owner Capture at Creation
 
-- [ ] 2.1 RED+GREEN: `meetingQueueService.ts` — mandatory `ownerId`, optional `participantEmails`, threaded to insert — `apps/__tests__/shared/services/meeting-queue-service.test.ts`.
-- [ ] 2.2 Thread `ownerId`: `EnqueueMeetingCommand.ts`, `meetingService.ts`, `app/actions/bot.ts` (session, 401 without `session.user.id`), `api/v1/extension/bot/start/route.ts` (`auth.payload.userId`, no new logic).
-- [ ] 2.3 RED+GREEN: legacy `api/bot/start/route.ts` requires `ownerEmail`, resolves via `UserRepository.findByEmail`, 400 on missing/unknown — `apps/__tests__/web/api/bot-start.test.ts`.
-- [ ] 2.4 `apps/worker/src/integrations/calendar/types.ts`: `CalendarMeetingEvent` gains `ownerUserId`, `participantEmails`.
-- [ ] 2.5 RED+GREEN: `GoogleCalendarProvider.ts` stamps `ownerUserId` per OAuth user, maps `event.attendees` — `apps/__tests__/worker/calendar/google-calendar-provider.test.ts`.
-- [ ] 2.6 RED+GREEN: `autoJoinService.ts` threads `ownerId`/`participantEmails` on primary path, skips+logs on ownerless env-fallback — `apps/__tests__/worker/shared/auto-join-service.test.ts`.
+- [x] 2.1 RED+GREEN: `meetingQueueService.ts` — mandatory `ownerId`, optional `participantEmails`, threaded to insert — `apps/__tests__/shared/services/meeting-queue-service.test.ts`.
+- [x] 2.2 Thread `ownerId`: `EnqueueMeetingCommand.ts`, `meetingService.ts`, `app/actions/bot.ts` (session, 401 without `session.user.id`), `api/v1/extension/bot/start/route.ts` (`auth.payload.userId`, no new logic). RED+GREEN added for `bot.ts`'s new unauthorized branch (`apps/__tests__/web/actions/bot-start-action.test.ts`) beyond the plan's minimum, since it introduces real conditional logic.
+- [x] 2.3 RED+GREEN: legacy `api/bot/start/route.ts` requires `ownerEmail`, resolves via `UserRepository.findByEmail`, 400 on missing/unknown — `apps/__tests__/web/api/bot-start.test.ts`.
+- [x] 2.4 `apps/worker/src/integrations/calendar/types.ts`: `CalendarMeetingEvent` gains `ownerUserId`, `participantEmails`. Implemented as optional fields (`ownerUserId?: string`, `participantEmails?: string[]`) rather than mandatory — required for type-correctness since the testing-strategy table itself says the service-account fallback path "yields no ownerUserId".
+- [x] 2.5 RED+GREEN: `GoogleCalendarProvider.ts` stamps `ownerUserId` per OAuth user, maps `event.attendees` — `apps/__tests__/worker/calendar/google-calendar-provider.test.ts`.
+- [x] 2.6 RED+GREEN: `autoJoinService.ts` threads `ownerId`/`participantEmails` on primary path, skips+logs on ownerless env-fallback — `apps/__tests__/worker/shared/auto-join-service.test.ts`.
+
+Also implemented ahead of schedule (explicitly requested alongside Phase 2, out of tasks.md's own
+phase order): the `enqueue_meeting` half of task 6.3 — `integrations/chat/tools/definitions.ts`'s
+`enqueueMeetingTool.execute` now resolves `getServerSession(authOptions)` and sets `ownerId` from
+`session.user.id`, rejecting with a structured error result when unauthenticated — RED+GREEN in
+`apps/__tests__/web/integrations/chat-tools-definitions.test.ts`. `manage_meeting_share`'s `"public"`
+removal and grant-service routing (the rest of 6.3) is untouched — still Phase 6 scope.
 
 ## Phase 3: Ownership-Scoped Visibility
 

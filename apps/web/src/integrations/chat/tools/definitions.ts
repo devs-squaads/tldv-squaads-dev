@@ -5,6 +5,8 @@
  * repositorios existentes directamente. No hay lógica nueva de negocio aquí.
  */
 
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import { WebMeetingRepository, type MeetingFilters } from "@/repositories/WebMeetingRepository";
 import { WebSettingsRepository } from "@/repositories/WebSettingsRepository";
 import { MeetingShareRepository } from "@/repositories/MeetingShareRepository";
@@ -327,6 +329,19 @@ export const enqueueMeetingTool: ToolDefinition<EnqueueMeetingArgs, EnqueueMeeti
   },
   mutates: true,
   async execute({ meeting_url, bot_name, duration_minutes }) {
+    // No hay contexto de sesión threadeado en el tool-calling stack hoy —
+    // resolvemos getServerSession directo acá (elección pragmática del
+    // diseño, ver spec/features/009-meeting-ownership-sharing/plan.md).
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return {
+        success: false,
+        meetingId: null,
+        message: "No se pudo resolver el usuario autenticado para asignar la reunión.",
+        status: "error",
+      };
+    }
+
     // Validación básica de URL
     let parsedUrl: URL;
     try {
@@ -360,6 +375,7 @@ export const enqueueMeetingTool: ToolDefinition<EnqueueMeetingArgs, EnqueueMeeti
       botName: bot_name ?? "Squaads Bot",
       durationMinutes: duration_minutes ?? 60,
       status: "pending",
+      ownerId: session.user.id,
       createdAt: now,
       updatedAt: now,
     });

@@ -1,5 +1,7 @@
 "use server";
 
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import { MeetingService } from "@/services/meetingService";
 import { requestMeetingReprocess, requestMeetingRetry, requestMeetingSummaryRefine } from "@/services/workerRecoveryClient";
 
@@ -9,8 +11,19 @@ export async function startBotAction(formData: {
   duration: number;
   provider?: string;
 }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return { success: false, error: "Unauthorized" };
+  }
+
   const { meetingUrl, botName, duration, provider } = formData;
-  const { id } = await MeetingService.enqueueMeeting({ meetingUrl, botName, duration, provider });
+  const { id } = await MeetingService.enqueueMeeting({
+    meetingUrl,
+    botName,
+    duration,
+    provider,
+    ownerId: session.user.id,
+  });
   return { success: true, id };
 }
 
