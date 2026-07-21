@@ -27,7 +27,7 @@ function setupHarness() {
 
 async function importQueueMeetingRun() {
   const mod = await import(`../../../../packages/shared/src/services/meetingQueueService.ts?test=${Date.now()}-${Math.random()}`);
-  return mod.queueMeetingRun as (params: Record<string, unknown>) => Promise<{ id: string }>;
+  return mod.queueMeetingRun as (params: Record<string, unknown>) => Promise<{ id: string; ownerId: string }>;
 }
 
 describe("queueMeetingRun — mandatory ownerId (009 Phase 2)", () => {
@@ -35,7 +35,7 @@ describe("queueMeetingRun — mandatory ownerId (009 Phase 2)", () => {
     const { insertCalls } = setupHarness();
     const queueMeetingRun = await importQueueMeetingRun();
 
-    await queueMeetingRun({
+    const result = await queueMeetingRun({
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       botName: "Squaads Bot",
       duration: 60,
@@ -44,13 +44,14 @@ describe("queueMeetingRun — mandatory ownerId (009 Phase 2)", () => {
 
     expect(insertCalls).toHaveLength(1);
     expect(insertCalls[0]?.ownerId).toBe("user-1");
+    expect(result.ownerId).toBe("user-1");
   });
 
   it("persists participantEmails when provided", async () => {
     const { insertCalls } = setupHarness();
     const queueMeetingRun = await importQueueMeetingRun();
 
-    await queueMeetingRun({
+    const result = await queueMeetingRun({
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       botName: "Squaads Bot",
       duration: 60,
@@ -59,13 +60,14 @@ describe("queueMeetingRun — mandatory ownerId (009 Phase 2)", () => {
     });
 
     expect(insertCalls[0]?.participantEmails).toEqual(["guest-a@example.com", "guest-b@example.com"]);
+    expect(result.ownerId).toBe("user-1");
   });
 
   it("defaults participantEmails to null when omitted", async () => {
     const { insertCalls } = setupHarness();
     const queueMeetingRun = await importQueueMeetingRun();
 
-    await queueMeetingRun({
+    const result = await queueMeetingRun({
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       botName: "Squaads Bot",
       duration: 60,
@@ -73,5 +75,6 @@ describe("queueMeetingRun — mandatory ownerId (009 Phase 2)", () => {
     });
 
     expect(insertCalls[0]?.participantEmails).toBeNull();
+    expect(result.ownerId).toBe("user-1");
   });
 });
