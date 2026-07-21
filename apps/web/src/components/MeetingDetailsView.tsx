@@ -113,20 +113,24 @@ export function MeetingDetailsView({
   const seekToTimeRef = useRef<((time: number) => void) | null>(null);
   const router = useRouter();
 
-  const canReprocess = meeting.status === "completed" && meeting.recordingFilePath && (!meeting.rawTranscription || !meeting.summary);
+  const canReprocess =
+    (meeting.status === "completed" || meeting.status === "transcription_error") &&
+    meeting.recordingFilePath &&
+    (!meeting.rawTranscription || !meeting.summary);
 
   const handleReprocess = async () => {
+    const priorStatus = meeting.status; // captured before the optimistic set below, restored on failure
     setIsReprocessing(true);
     setMeeting((m) => ({ ...m, status: "transcribing" }));
     try {
       const result = await reprocessMeetingAction(meeting.id);
       if (!result.success) {
         alert("Error al reprocesar: " + result.error);
-        setMeeting((m) => ({ ...m, status: "completed" }));
+        setMeeting((m) => ({ ...m, status: priorStatus }));
       }
     } catch (err) {
       console.error(err);
-      setMeeting((m) => ({ ...m, status: "completed" }));
+      setMeeting((m) => ({ ...m, status: priorStatus }));
     } finally {
       setIsReprocessing(false);
     }
@@ -652,8 +656,9 @@ export function MeetingDetailsView({
             </Button>
           )}
 
-          {/* Download */}
-          {meeting.status === "completed" && meeting.recordingFilePath && (
+          {/* Download — gated on the file existing, not on status (spec 010: a transcription_error
+              meeting still has a good recording, so the video must stay visible/downloadable) */}
+          {meeting.recordingFilePath && (
             <a href={meeting.recordingFilePath} download={`${meeting.botName || meeting.id}.mp4`}
               className="inline-flex items-center justify-center rounded-[var(--radius)] font-medium transition-all border border-[var(--border)] bg-transparent hover:bg-[var(--accent)] text-[var(--foreground)] h-8 px-3 text-xs gap-1.5">
               <Download className="h-3.5 w-3.5" />
@@ -699,8 +704,8 @@ export function MeetingDetailsView({
         </Card>
       )}
 
-      {/* Video Player with Chapters */}
-      {meeting.status === "completed" && meeting.recordingFilePath && (
+      {/* Video Player with Chapters — same recordingFilePath gating as the download link above */}
+      {meeting.recordingFilePath && (
         <Card className="overflow-hidden">
           <CardHeader className="cursor-pointer" onClick={() => setShowVideo(!showVideo)}>
             <CardTitle className="flex items-center justify-between text-lg">

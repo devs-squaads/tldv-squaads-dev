@@ -1,4 +1,5 @@
-import { pgEnum, pgTable, text, integer, timestamp, boolean, index, jsonb } from "drizzle-orm/pg-core";
+import { pgEnum, pgTable, text, integer, timestamp, boolean, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -35,33 +36,48 @@ export const meetingStatusEnum = pgEnum("meeting_status", [
   "completed",
   "admission_timeout",
   "error",
+  "transcription_error",
   "rejected",
 ]);
 
-export const meetings = pgTable("meetings", {
-  id: text("id").primaryKey(),
-  name: text("name"),
-  url: text("url").notNull(),
-  botName: text("bot_name"),
-  ownerId: text("owner_id")
-    .notNull()
-    .references(() => users.id),
-  sourceProvider: text("source_provider"),
-  sourceEventId: text("source_event_id"),
-  organizerEmail: text("organizer_email"),
-  participantEmails: jsonb("participant_emails").$type<string[]>(),
-  status: meetingStatusEnum("status").default("pending").notNull(),
-  errorMessage: text("error_message"),
-  rawTranscription: text("raw_transcription"),
-  summary: text("summary"),
-  recordingFilePath: text("recording_file_path"),
-  recordingStorageKey: text("recording_storage_key"),
-  startsAt: timestamp("starts_at", { withTimezone: true }),
-  endsAt: timestamp("ends_at", { withTimezone: true }),
-  durationMinutes: integer("duration_minutes").default(60),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-}).enableRLS();
+export const meetings = pgTable(
+  "meetings",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    url: text("url").notNull(),
+    botName: text("bot_name"),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id),
+    sourceProvider: text("source_provider"),
+    sourceEventId: text("source_event_id"),
+    organizerEmail: text("organizer_email"),
+    participantEmails: jsonb("participant_emails").$type<string[]>(),
+    status: meetingStatusEnum("status").default("pending").notNull(),
+    errorMessage: text("error_message"),
+    rawTranscription: text("raw_transcription"),
+    summary: text("summary"),
+    recordingFilePath: text("recording_file_path"),
+    recordingStorageKey: text("recording_storage_key"),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    endsAt: timestamp("ends_at", { withTimezone: true }),
+    durationMinutes: integer("duration_minutes").default(60),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    // Enforces (source_provider, source_event_id) uniqueness at the DB level so two
+    // concurrent auto-join polls for the same calendar event can never both insert a
+    // row — the arbiter for MeetingRepository.insertDedupedBySourceEvent's
+    // ON CONFLICT DO NOTHING. Partial (WHERE source_event_id IS NOT NULL) because
+    // manually-enqueued meetings carry null sourceEventId/sourceProvider and must stay
+    // exempt. See spec/features/010-auto-join-dedup-and-recovery/spec.md Problem 1.
+    uniqueIndex("meetings_source_event_unique_idx")
+      .on(table.sourceProvider, table.sourceEventId)
+      .where(sql`${table.sourceEventId} IS NOT NULL`),
+  ],
+).enableRLS();
 
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
@@ -104,16 +120,28 @@ export const meetingShareAccessLogs = pgTable("meeting_share_access_logs", {
   accessedAt: timestamp("accessed_at", { withTimezone: true }).notNull(),
 }).enableRLS();
 
-export const meetingAccessGrants = pgTable("meeting_access_grants", {
-  id: text("id").primaryKey(),
-  meetingId: text("meeting_id").notNull(),
-  ownerId: text("owner_id").notNull(),
-  granteeUserId: text("grantee_user_id").notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }),
-  revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-}).enableRLS();
+export const meetingAccessGrants = pgTable(
+  "meeting_access_grants",
+  {
+    id: text("id").primaryKey(),
+    meetingId: text("meeting_id").notNull(),
+    ownerId: text("owner_id").notNull(),
+    granteeUserId: text("grantee_user_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    // Unconditional (NOT partial by revokedAt/expiresAt) — the idempotency contract is "at most
+    // one grant row ever exists per (meetingId, granteeUserId) pair, full stop", matching
+    // existsForMeetingAndGrantee's semantics (any row, revoked or not, counts as "already
+    // handled"). Arbiter for MeetingAccessGrantRepository.createDedupedForMeetingAndGrantee's
+    // ON CONFLICT DO NOTHING — same race class as meetings' source-event index (Problem 1),
+    // one layer up. See spec/features/010-auto-join-dedup-and-recovery/spec.md Problem 2.
+    uniqueIndex("meeting_access_grants_meeting_grantee_unique_idx").on(table.meetingId, table.granteeUserId),
+  ],
+).enableRLS();
 
 export const chatMessages = pgTable(
   "chat_messages",
