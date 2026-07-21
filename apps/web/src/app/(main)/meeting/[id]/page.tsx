@@ -1,10 +1,12 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getServerSession } from "next-auth";
 import { MeetingDetailsView } from "@/components/MeetingDetailsView";
 import { SquaadsLogo } from "@/components/SquaadsLogo";
 import { SquaadsTitle } from "@/components/SquaadsTitle";
 import Link from "next/link";
 import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
-import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
+import { authOptions } from "@/auth";
+import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { MeetingShareService } from "@/services/meetingShareService";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlassCursor } from "@/components/GlassLayout";
@@ -20,7 +22,10 @@ export default async function MeetingPage({
 }) {
   const { id } = await params;
 
-  const meeting = await MeetingRepository.findById(id);
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) redirect("/login");
+
+  const meeting = await WebMeetingRepository.findByIdForUser(session.user.id, id);
   if (!meeting) {
     notFound();
   }
