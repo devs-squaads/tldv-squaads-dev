@@ -32,10 +32,10 @@ PR2/PR4 sit near the 400-line edge; split further at apply time if actual diff o
 
 ## Phase 1: Schema & Migration Foundation
 
-- [ ] 1.1 `packages/shared/src/db/schema.ts`: add `meetings.ownerId` (NOT NULL FK users.id), `recordingStorageKey`, `participantEmails`; new `meetingAccessGrants` table; `shareTypeEnum` drops `"public"`.
-- [ ] 1.2 `drizzle/0006_meeting_ownership_and_sharing.sql`: revoke+relabel existing `"public"` rows, recreate `share_type` enum, add new columns/table.
-- [ ] 1.3 RED+GREEN: `packages/shared/src/repositories/UserRepository.ts` (`findByEmail`) + `apps/__tests__/shared/repositories/user-repository.test.ts`.
-- [ ] 1.4 Apply migration via `bun run infra:reset` (test data, no backfill); confirm schema loads clean.
+- [x] 1.1 `packages/shared/src/db/schema.ts`: add `meetings.ownerId` (NOT NULL FK users.id), `recordingStorageKey`, `participantEmails`; new `meetingAccessGrants` table; `shareTypeEnum` drops `"public"`.
+- [x] 1.2 `drizzle/0006_meeting_ownership_and_sharing.sql`: revoke+relabel existing `"public"` rows, recreate `share_type` enum, add new columns/table.
+- [x] 1.3 RED+GREEN: `packages/shared/src/repositories/UserRepository.ts` (`findByEmail`) + `apps/__tests__/shared/repositories/user-repository.test.ts`.
+- [x] 1.4 Apply migration via `bun run infra:reset` + `bun run db:push`; confirmed schema loads clean against a fresh local DB (2026-07-20). No pre-existing meeting/db containers reused — stale containers from a prior session (`meeting-db`, `meeting-storage`, `meeting-storage-mc`, `meeting-worker`) were removed first since they conflicted with `docker compose up`.
 
 ## Phase 2: Owner Capture at Creation
 
