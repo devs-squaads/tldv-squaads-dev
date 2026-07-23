@@ -47,6 +47,10 @@ validate_worker_secrets
 start_multimedia_stack
 
 if [ "${NODE_ENV:-development}" = "development" ]; then
+  # Local dev bind-mounts the full monorepo package.json over the image's reduced
+  # worker+shared one (Dockerfile.worker), so node_modules goes stale on every
+  # container start — resync it here instead of requiring a manual `bun i`.
+  bun install
   exec bun run --cwd apps/worker dev
 else
   exec bun run --cwd apps/worker start
