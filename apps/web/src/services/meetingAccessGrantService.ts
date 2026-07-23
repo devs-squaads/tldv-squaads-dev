@@ -39,7 +39,7 @@ export class MeetingAccessGrantService {
     const now = new Date();
     const id = randomUUID();
 
-    await MeetingAccessGrantRepository.create({
+    const persisted = await MeetingAccessGrantRepository.upsertActive({
       id,
       meetingId: meeting.id,
       ownerId: meeting.ownerId,
@@ -50,7 +50,7 @@ export class MeetingAccessGrantService {
       updatedAt: now,
     });
 
-    return { id, expiresAt };
+    return { id: persisted.id, expiresAt: persisted.expiresAt };
   }
 
   static async listGrantsByMeetingId(callerId: string, meetingId: string): Promise<MeetingAccessGrantRecord[]> {

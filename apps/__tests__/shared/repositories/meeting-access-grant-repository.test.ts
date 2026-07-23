@@ -169,6 +169,61 @@ describe.skipIf(!dbAvailable)("MeetingAccessGrantRepository CRUD (requires `bun 
 
     await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${meetingId}`);
   });
+
+  it("upsertActive inserts a new grant when none exists for the pair", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix);
+
+    const result = await MeetingAccessGrantRepository.upsertActive(grant);
+
+    expect(result.id).toBe(grant.id);
+    expect(result.revokedAt).toBeNull();
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "id" = ${grant.id}`);
+  });
+
+  it("upsertActive un-revokes and refreshes an existing revoked grant instead of crashing on the unique pair index", async () => {
+    const suffix = crypto.randomUUID();
+    const revoked = makeGrant(suffix, { revokedAt: new Date("2026-01-01T00:00:00Z") });
+    await MeetingAccessGrantRepository.create(revoked);
+
+    const newExpiry = new Date(Date.now() + 60_000);
+    const result = await MeetingAccessGrantRepository.upsertActive({
+      ...makeGrant(`${suffix}-again`, { meetingId: revoked.meetingId, granteeUserId: revoked.granteeUserId }),
+      expiresAt: newExpiry,
+    });
+
+    expect(result.id).toBe(revoked.id); // same row, reactivated — not a second insert
+    expect(result.revokedAt).toBeNull();
+    expect(result.expiresAt?.toISOString()).toBe(newExpiry.toISOString());
+
+    const rows = await db.execute<{ id: string }>(
+      sql`SELECT id FROM "meeting_access_grants" WHERE "meeting_id" = ${revoked.meetingId} AND "grantee_user_id" = ${revoked.granteeUserId}`,
+    );
+    expect(rows.rows).toHaveLength(1);
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${revoked.meetingId}`);
+  });
+
+  it("upsertActive is idempotent for an already-active grant (no duplicate-key crash on repeat clicks)", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix);
+    await MeetingAccessGrantRepository.upsertActive(grant);
+
+    const result = await MeetingAccessGrantRepository.upsertActive(
+      makeGrant(`${suffix}-again`, { meetingId: grant.meetingId, granteeUserId: grant.granteeUserId }),
+    );
+
+    expect(result.id).toBe(grant.id);
+    expect(result.revokedAt).toBeNull();
+
+    const rows = await db.execute<{ id: string }>(
+      sql`SELECT id FROM "meeting_access_grants" WHERE "meeting_id" = ${grant.meetingId} AND "grantee_user_id" = ${grant.granteeUserId}`,
+    );
+    expect(rows.rows).toHaveLength(1);
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${grant.meetingId}`);
+  });
 });
 
 /** Mirrors MeetingAccessGrantRepository.ts's `findLiveGrant()` WHERE clause verbatim. */

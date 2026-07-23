@@ -30,6 +30,7 @@ interface Meeting {
   rawTranscription: string | null;
   summary: string | null;
   recordingFilePath: string | null;
+  recordingDownloadUrl?: string | null;
   errorMessage: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -658,8 +659,8 @@ export function MeetingDetailsView({
 
           {/* Download — gated on the file existing, not on status (spec 010: a transcription_error
               meeting still has a good recording, so the video must stay visible/downloadable) */}
-          {meeting.recordingFilePath && (
-            <a href={meeting.recordingFilePath} download={`${meeting.botName || meeting.id}.mp4`}
+          {(meeting.recordingDownloadUrl || meeting.recordingFilePath) && (
+            <a href={meeting.recordingDownloadUrl || meeting.recordingFilePath!} download={`${meeting.botName || meeting.id}.mp4`}
               className="inline-flex items-center justify-center rounded-[var(--radius)] font-medium transition-all border border-[var(--border)] bg-transparent hover:bg-[var(--accent)] text-[var(--foreground)] h-8 px-3 text-xs gap-1.5">
               <Download className="h-3.5 w-3.5" />
               MP4
