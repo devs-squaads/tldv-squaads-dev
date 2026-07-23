@@ -36,8 +36,10 @@ export default async function MeetingPage({
   const participantSuggestions = await ParticipantSuggestionService.resolveSuggestions(
     meeting.participantEmails,
   );
-  // Try to generate a fresh signed URL for the recording
-  const initialMeeting = { ...meeting };
+  // Try to generate fresh signed URLs for the recording — inline for the <video> player,
+  // attachment for the download link (a single attachment-disposition URL can't do both;
+  // browsers refuse to play a <video> whose response forces a download).
+  const initialMeeting: typeof meeting & { recordingDownloadUrl?: string | null } = { ...meeting };
   if (meeting.status === "completed" && meeting.recordingFilePath) {
     try {
       const { StorageProviderFactory } = await import("@meeting-bot/shared/integrations/storage/StorageProviderFactory");
@@ -45,8 +47,12 @@ export default async function MeetingPage({
       const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(meeting.id, meeting.url);
 
       console.log(`[MeetingPage] Generating signed URL for: ${storageKey}`);
-      const signedUrl = await storage.getSignedUrl(storageKey);
+      const [signedUrl, downloadUrl] = await Promise.all([
+        storage.getSignedUrl(storageKey, undefined, "inline"),
+        storage.getSignedUrl(storageKey, undefined, "attachment"),
+      ]);
       initialMeeting.recordingFilePath = signedUrl;
+      initialMeeting.recordingDownloadUrl = downloadUrl;
     } catch (err) {
       console.error("[MeetingPage] Failed to generate signed URL:", err);
     }
