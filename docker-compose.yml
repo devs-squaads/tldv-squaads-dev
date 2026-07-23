@@ -33,6 +33,8 @@ services:
     environment:
       ROLE: worker
       IS_DOCKER: "true"
+    ports:
+      - "127.0.0.1:${WORKER_INTERNAL_PORT:-4000}:${WORKER_INTERNAL_PORT:-4000}"
     volumes:
       - .:/app
       - /app/node_modules

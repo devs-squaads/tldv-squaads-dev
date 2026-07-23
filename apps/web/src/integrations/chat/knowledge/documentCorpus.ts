@@ -144,6 +144,13 @@ export const CHAT_DOCUMENT_CORPUS: KnowledgeDocument[] = [
       "Responder en tono conversacional, sin encabezados tipo informe. Usar párrafos cortos y listas simples con guiones o numeración.",
   },
   {
+    id: "support-report-problem",
+    title: "Cómo escalar un problema al soporte",
+    tags: ["soporte", "reporte", "problema", "bug"],
+    content:
+      "Para escalar un problema al equipo, el usuario abre el tema Soporte en el chat y presiona el botón 'Reportar un problema', que aparece debajo de esa respuesta. El reporte se envía directamente al canal de soporte del equipo. Esta funcionalidad ya está disponible, no es un desarrollo futuro.",
+  },
+  {
     id: "suggestions-guidelines",
     title: "Reglas del bloque de sugerencias",
     tags: ["suggestions", "ui", "navegacion"],

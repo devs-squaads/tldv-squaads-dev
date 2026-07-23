@@ -405,6 +405,28 @@ export default function SettingsView({ initialSettings }: { initialSettings: Rec
             </div>
           )}
 
+          {/*
+            "Conectado" arriba solo refleja que hay un refresh token guardado, no que
+            siga siendo válido contra Google (puede vencer o perder el scope de Calendario
+            sin que la app se entere). El toggle de Auto-Join tampoco lo repara: solo
+            pisa el booleano calendar_enabled, nunca vuelve a pedir consentimiento.
+            Este link reusa el mismo flujo OAuth de "Conectar Calendario" de arriba para
+            forzar un token fresco sin esperar a que alguien detecte el fallo en producción.
+          */}
+          {hasRefreshToken && !calendarLoading && (
+            <div className="flex items-center justify-between px-1">
+              <p className="text-[11px] text-[var(--muted-foreground)]">
+                ¿El bot dejó de unirse a tus reuniones? Puede que el permiso haya vencido.
+              </p>
+              <a href="/api/settings/calendar-connect" className="shrink-0">
+                <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7">
+                  <Calendar className="h-3 w-3" />
+                  Reconectar
+                </Button>
+              </a>
+            </div>
+          )}
+
           {/* Permissions summary */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="flex items-center gap-2 p-2 rounded-lg" style={{ background: "rgba(0, 242, 255, 0.04)", border: "1px solid rgba(0, 242, 255, 0.08)" }}>
