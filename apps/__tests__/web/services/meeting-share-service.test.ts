@@ -1,6 +1,17 @@
 import { describe, expect, it, mock, beforeEach } from "bun:test";
+import { buildShareAliasToken } from "../../../../apps/web/src/integrations/sharing/utils";
 
-type MeetingRow = { id: string; ownerId: string; status: string };
+type MeetingRow = {
+  id: string;
+  ownerId: string;
+  status: string;
+  url?: string;
+  recordingFilePath?: string | null;
+  recordingStorageKey?: string | null;
+  summary?: string | null;
+  rawTranscription?: string | null;
+  createdAt?: Date;
+};
 type ShareRow = {
   id: string;
   meetingId: string;
@@ -23,13 +34,17 @@ const state: {
   shares: Record<string, ShareRow>;
   createCalls: ShareRow[];
   revokeCalls: string[];
-} = { meetings: {}, shares: {}, createCalls: [], revokeCalls: [] };
+  signCalls: string[];
+  accessLogs: string[];
+} = { meetings: {}, shares: {}, createCalls: [], revokeCalls: [], signCalls: [], accessLogs: [] };
 
 function resetState() {
   state.meetings = {};
   state.shares = {};
   state.createCalls = [];
   state.revokeCalls = [];
+  state.signCalls = [];
+  state.accessLogs = [];
 }
 
 const bunMock = mock as typeof mock & {
@@ -49,9 +64,34 @@ bunMock.module("@/repositories/MeetingShareRepository", () => ({
       state.shares[values.id] = values;
     },
     findById: async (id: string) => state.shares[id] ?? null,
+    findByTokenHash: async (tokenHash: string) =>
+      Object.values(state.shares).find((s) => s.tokenHash === tokenHash) ?? null,
     revokeById: async (id: string) => {
       state.revokeCalls.push(id);
     },
+    markAccessed: async () => {},
+    insertAccessLog: async (entry: { result: string }) => {
+      state.accessLogs.push(entry.result);
+    },
+  },
+}));
+
+bunMock.module("@/integrations/sharing/SharingProviderFactory", () => ({
+  SharingProviderFactory: {
+    getProvider: () => ({
+      verifyAccess: async () => true,
+    }),
+  },
+}));
+
+bunMock.module("@meeting-bot/shared/integrations/storage/StorageProviderFactory", () => ({
+  StorageProviderFactory: {
+    getProvider: () => ({
+      getSignedUrl: async (key: string) => {
+        state.signCalls.push(key);
+        return `signed:${key}`;
+      },
+    }),
   },
 }));
 
@@ -126,6 +166,63 @@ describe("MeetingShareService", () => {
     it("rejects a non-owner caller", async () => {
       await expect(MeetingShareService.revokeShare("share-1", "intruder-1")).rejects.toThrow();
       expect(state.revokeCalls).toHaveLength(0);
+    });
+  });
+
+  describe("verifyRestrictedAccess", () => {
+    const SHARE_UUID = "11111111-1111-4111-8111-111111111111"; // parseShareAliasToken requires a real UUID shape
+
+    function seedActiveShare(tokenHash: string) {
+      state.shares[SHARE_UUID] = {
+        id: SHARE_UUID,
+        meetingId: "meeting-1",
+        shareType: "restricted_email",
+        tokenHash,
+        recipientEmail: "guest@example.com",
+        recipientEmailNormalized: "guest@example.com",
+        expiresAt: null,
+        revokedAt: null,
+        createdBy: "owner-1",
+        otpHash: null,
+        otpExpiresAt: null,
+        lastAccessedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      return buildShareAliasToken(SHARE_UUID, tokenHash);
+    }
+
+    it("signs the meeting's persisted recordingStorageKey, not the recomputed legacy key", async () => {
+      state.meetings["meeting-1"] = {
+        id: "meeting-1",
+        ownerId: "owner-1",
+        status: "completed",
+        url: "https://meet.google.com/abc-defg-hij",
+        recordingFilePath: "http://localhost:9000/meetings/google-meet/meeting_2026-07-22_meeting-1.mp4",
+        recordingStorageKey: "google-meet/meeting_2026-07-22_meeting-1.mp4",
+      };
+      const token = seedActiveShare("a".repeat(64));
+
+      const result = await MeetingShareService.verifyRestrictedAccess(token, "guest@example.com", "123456");
+
+      expect(result.status).toBe("ok");
+      expect(state.signCalls).toEqual(["google-meet/meeting_2026-07-22_meeting-1.mp4"]);
+    });
+
+    it("falls back to the legacy computed key when recordingStorageKey is null", async () => {
+      state.meetings["meeting-1"] = {
+        id: "meeting-1",
+        ownerId: "owner-1",
+        status: "completed",
+        url: "https://meet.google.com/abc-defg-hij",
+        recordingFilePath: "http://localhost:9000/meetings/google-meet/meeting-1.mp4",
+        recordingStorageKey: null,
+      };
+      const token = seedActiveShare("b".repeat(64));
+
+      await MeetingShareService.verifyRestrictedAccess(token, "guest@example.com", "123456");
+
+      expect(state.signCalls).toEqual(["google-meet/meeting-1.mp4"]);
     });
   });
 });

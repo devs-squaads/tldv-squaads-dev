@@ -103,7 +103,7 @@ export class MeetingShareService {
     let recordingUrl: string | null = null;
     if (meeting.recordingFilePath) {
       try {
-        const storageKey = buildRecordingStorageKey(meeting.id, meeting.url);
+        const storageKey = meeting.recordingStorageKey ?? buildRecordingStorageKey(meeting.id, meeting.url);
         const signedTtl = parseIntEnv("SHARE_SIGNED_URL_TTL_SECONDS", 900);
         const storage = StorageProviderFactory.getProvider();
         recordingUrl = await storage.getSignedUrl(storageKey, signedTtl, "inline");
