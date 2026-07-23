@@ -75,6 +75,30 @@ export class MeetingAccessGrantRepository {
     return existing;
   }
 
+  /**
+   * Upsert for the manual "grant access" flow (Settings/dashboard share panel). The unique
+   * index on (meetingId, granteeUserId) is unconditional, so a plain `create()` crashes if any
+   * row already exists for the pair — active OR revoked. This re-activates in place instead:
+   * un-revokes and refreshes expiresAt/updatedAt on conflict. Contrast with
+   * `createDedupedForMeetingAndGrantee`, which is fire-and-forget for the auto-join path and
+   * deliberately leaves a revoked row alone.
+   */
+  static async upsertActive(values: MeetingAccessGrantInsert): Promise<MeetingAccessGrantRecord> {
+    const [row] = await db
+      .insert(meetingAccessGrants)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [meetingAccessGrants.meetingId, meetingAccessGrants.granteeUserId],
+        set: {
+          revokedAt: null,
+          expiresAt: values.expiresAt ?? null,
+          updatedAt: values.updatedAt,
+        },
+      })
+      .returning();
+    return row;
+  }
+
   static async findLiveGrant(
     meetingId: string,
     granteeUserId: string,

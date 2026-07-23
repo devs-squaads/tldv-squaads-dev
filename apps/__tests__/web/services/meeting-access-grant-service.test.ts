@@ -38,9 +38,10 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingRepository", () => ({
 
 bunMock.module("@meeting-bot/shared/repositories/MeetingAccessGrantRepository", () => ({
   MeetingAccessGrantRepository: {
-    create: async (values: GrantRow) => {
+    upsertActive: async (values: GrantRow) => {
       state.createCalls.push(values);
       state.grants[values.id] = values;
+      return values;
     },
     findById: async (id: string) => state.grants[id] ?? null,
     listByMeetingId: async (meetingId: string) =>

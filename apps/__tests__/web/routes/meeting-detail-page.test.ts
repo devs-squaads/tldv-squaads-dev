@@ -61,9 +61,9 @@ function setupHarness(meetingOverrides: Record<string, unknown>) {
   moduleMock.module("@meeting-bot/shared/integrations/storage/StorageProviderFactory", () => ({
     StorageProviderFactory: {
       getProvider: () => ({
-        getSignedUrl: async (key: string) => {
+        getSignedUrl: async (key: string, _expiresIn?: number, disposition: string = "inline") => {
           signCalls.push(key);
-          return `signed:${key}`;
+          return `signed:${key}:${disposition}`;
         },
       }),
     },
@@ -87,9 +87,21 @@ describe("MeetingPage storage key resolution", () => {
     const element = await MeetingPage({ params: Promise.resolve({ id: "meeting-1" }) });
     const detailsView = findElementByType(element, "MeetingDetailsView");
 
-    expect(harness.signCalls).toEqual(["google-meet/daily-standup_2026-01-01_meeting-1.mp4"]);
-    expect((detailsView?.props.initialMeeting as { recordingFilePath: string }).recordingFilePath).toBe(
-      "signed:google-meet/daily-standup_2026-01-01_meeting-1.mp4",
+    // Two signed URLs now: one inline (for the <video> player), one attachment (for the
+    // download link) — a single attachment-disposition URL can't do both.
+    expect(harness.signCalls).toEqual([
+      "google-meet/daily-standup_2026-01-01_meeting-1.mp4",
+      "google-meet/daily-standup_2026-01-01_meeting-1.mp4",
+    ]);
+    const initialMeeting = detailsView?.props.initialMeeting as {
+      recordingFilePath: string;
+      recordingDownloadUrl: string;
+    };
+    expect(initialMeeting.recordingFilePath).toBe(
+      "signed:google-meet/daily-standup_2026-01-01_meeting-1.mp4:inline",
+    );
+    expect(initialMeeting.recordingDownloadUrl).toBe(
+      "signed:google-meet/daily-standup_2026-01-01_meeting-1.mp4:attachment",
     );
   });
 
@@ -99,6 +111,6 @@ describe("MeetingPage storage key resolution", () => {
 
     await MeetingPage({ params: Promise.resolve({ id: "meeting-1" }) });
 
-    expect(harness.signCalls).toEqual(["google-meet/meeting-1.mp4"]);
+    expect(harness.signCalls).toEqual(["google-meet/meeting-1.mp4", "google-meet/meeting-1.mp4"]);
   });
 });

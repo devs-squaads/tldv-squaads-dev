@@ -1,4 +1,4 @@
-import { IStorageProvider, StorageUploadResult } from "@meeting-bot/shared/integrations/storage/types";
+import { IStorageProvider, SignedUrlDisposition, StorageUploadResult } from "@meeting-bot/shared/integrations/storage/types";
 import fs, { createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
@@ -121,7 +121,11 @@ export class S3StorageProvider implements IStorageProvider {
     await this.client!.send(command);
   }
 
-  async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
+  async getSignedUrl(
+    key: string,
+    expiresIn: number = 3600,
+    disposition: SignedUrlDisposition = "inline",
+  ): Promise<string> {
     await this.ensureInit();
     const { GetObjectCommand } = await getS3Module();
     const { getSignedUrl } = await getPresignerModule();
@@ -130,7 +134,9 @@ export class S3StorageProvider implements IStorageProvider {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
-      ResponseContentDisposition: `attachment; filename="${filename}"`,
+      // Omitted for "inline" — a Content-Disposition: attachment header stops a <video>
+      // element from playing the stream at all, it just forces a download instead.
+      ...(disposition === "attachment" ? { ResponseContentDisposition: `attachment; filename="${filename}"` } : {}),
     });
 
     if (!this.signingClient) throw new Error("S3 signing client is not initialized");
