@@ -39,7 +39,7 @@ export class MeetingAccessGrantService {
     const now = new Date();
     const id = randomUUID();
 
-    await MeetingAccessGrantRepository.create({
+    await MeetingAccessGrantRepository.upsertActive({
       id,
       meetingId: meeting.id,
       ownerId: meeting.ownerId,
