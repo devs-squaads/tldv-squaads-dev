@@ -30,6 +30,14 @@ const bunMock = mock as typeof mock & {
   module: (specifier: string, factory: () => unknown) => void;
 };
 
+// Overridden per-test to simulate Postgres onConflictDoUpdate returning the
+// pre-existing row (with its own id) instead of the row passed in.
+let upsertActiveImpl = async (values: GrantRow): Promise<GrantRow> => {
+  state.createCalls.push(values);
+  state.grants[values.id] = values;
+  return values;
+};
+
 bunMock.module("@meeting-bot/shared/repositories/MeetingRepository", () => ({
   MeetingRepository: {
     findById: async (id: string) => state.meetings[id] ?? null,
@@ -38,11 +46,7 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingRepository", () => ({
 
 bunMock.module("@meeting-bot/shared/repositories/MeetingAccessGrantRepository", () => ({
   MeetingAccessGrantRepository: {
-    upsertActive: async (values: GrantRow) => {
-      state.createCalls.push(values);
-      state.grants[values.id] = values;
-      return values;
-    },
+    upsertActive: async (values: GrantRow) => upsertActiveImpl(values),
     findById: async (id: string) => state.grants[id] ?? null,
     listByMeetingId: async (meetingId: string) =>
       Object.values(state.grants).filter((g) => g.meetingId === meetingId),
@@ -58,6 +62,11 @@ describe("MeetingAccessGrantService", () => {
   beforeEach(() => {
     resetState();
     state.meetings["meeting-1"] = { id: "meeting-1", ownerId: "owner-1" };
+    upsertActiveImpl = async (values: GrantRow) => {
+      state.createCalls.push(values);
+      state.grants[values.id] = values;
+      return values;
+    };
   });
 
   describe("createGrant", () => {
@@ -117,6 +126,28 @@ describe("MeetingAccessGrantService", () => {
       });
 
       expect(result.expiresAt).toBeNull();
+    });
+
+    it("returns the persisted row's id when upsertActive resolves an existing grant (onConflictDoUpdate)", async () => {
+      const existingId = "pre-existing-grant-id";
+      upsertActiveImpl = async (values: GrantRow) => {
+        // Simulates Postgres onConflictDoUpdate({ target: [meetingId, granteeUserId] }):
+        // the DB returns the EXISTING row, keyed by its own original id, not the
+        // freshly generated id the service passed in.
+        const persisted: GrantRow = { ...values, id: existingId };
+        state.createCalls.push(values);
+        state.grants[existingId] = persisted;
+        return persisted;
+      };
+
+      const result = await MeetingAccessGrantService.createGrant({
+        callerId: "owner-1",
+        meetingId: "meeting-1",
+        granteeUserId: "grantee-1",
+      });
+
+      expect(result.id).toBe(existingId);
+      expect(state.grants[result.id]).toBeTruthy();
     });
 
     it("rejects a ttlMinutes value outside the configured menu", async () => {
