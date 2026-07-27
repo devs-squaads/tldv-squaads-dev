@@ -47,9 +47,9 @@ Chain strategy: feature-branch-chain
 - [ ] 4.5 `app/actions/shareRequests.ts` (new): create/cancel/approve/reject/listByMeeting/listPending actions.
 
 ## Phase 5: `SmtpEmailProvider` (TDD)
-- [ ] 5.1 `apps/web/package.json`: add `nodemailer` + `@types/nodemailer` (dev).
-- [ ] 5.2 RED+GREEN `integrations/email/providers/SmtpEmailProvider.ts`: injectable transport factory; complete config → send; incomplete+production → throw (blocks send); incomplete+dev → console fallback. Test `smtp-email-provider.test.ts` per plan.md.
-- [ ] 5.3 `integrations/email/EmailProviderFactory.ts`: add `"smtp"` case.
+- [x] 5.1 `apps/web/package.json`: add `nodemailer` + `@types/nodemailer` (dev).
+- [x] 5.2 RED+GREEN `integrations/email/providers/SmtpEmailProvider.ts`: injectable transport factory; complete config → send; incomplete+production → throw (blocks send); incomplete+dev → console fallback. Test `smtp-email-provider.test.ts` per plan.md.
+- [x] 5.3 `integrations/email/EmailProviderFactory.ts`: add `"smtp"` case.
 
 ## Phase 6: UI Wiring
 - [ ] 6.1 `components/AppHeader.tsx` (new): extract shared header from the 3 duplicated inline headers.
@@ -63,7 +63,7 @@ Chain strategy: feature-branch-chain
 - [ ] 7.1 `integrations/chat/tools/definitions.ts`: `manage_meeting_share` passes caller role; member gets "requires admin approval" error.
 
 ## Phase 8: Docs
-- [ ] 8.1 `README.md`: add `SMTP_HOST/PORT/USER/PASS/FROM` + `EMAIL_PROVIDER=smtp` row to env table (only real sync target, no `.env*.example` files exist).
+- [x] 8.1 `README.md`: add `SMTP_HOST/PORT/USER/PASS/FROM` + `EMAIL_PROVIDER=smtp` row to env table (only real sync target, no `.env*.example` files exist). Pulled forward into PR4 (Phase 5) since it documents that unit's own new env vars — see apply-progress notes.
 
 ## Phase 9: Verification
 - [ ] 9.1 `bun test apps/__tests__` green (all new/extended suites from Phases 1-5).
