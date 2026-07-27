@@ -28,13 +28,13 @@ Chain strategy: feature-branch-chain
 | 6 | `MeetingDetailsView.tsx` 3 modes + access-type/days + "Solicitudes y accesos" + chat tool + README | PR6 (base=PR5) | Manual only (UI) | `bun run dev:web` full walkthrough: share all/subset/email, approve/reject, passive discovery | Revert MeetingDetailsView.tsx diff, definitions.ts, README.md |
 
 ## Phase 1: Schema & Repository
-- [ ] 1.1 `packages/shared/src/db/schema.ts`: add `shareRequestStatusEnum`, `shareRequestAccessTypeEnum`, `meetingShareRequests` table (CHECK grantee XOR email, 2 partial unique indexes), `meetingShares.singleUse` — per plan.md Schema section.
-- [ ] 1.2 `drizzle/NNNN_meeting_share_requests.sql`: additive migration matching 1.1.
-- [ ] 1.3 RED+GREEN `packages/shared/src/repositories/MeetingShareRequestRepository.ts` (create/findById/listPending/countPending/listByMeetingId/resolve/cancel). Test `meeting-share-request-repository.test.ts` per plan.md Testing Strategy.
+- [x] 1.1 `packages/shared/src/db/schema.ts`: add `shareRequestStatusEnum`, `shareRequestAccessTypeEnum`, `meetingShareRequests` table (CHECK grantee XOR email, 2 partial unique indexes), `meetingShares.singleUse` — per plan.md Schema section.
+- [x] 1.2 `drizzle/NNNN_meeting_share_requests.sql`: additive migration matching 1.1.
+- [x] 1.3 RED+GREEN `packages/shared/src/repositories/MeetingShareRequestRepository.ts` (create/findById/listPending/countPending/listByMeetingId/resolve/cancel). Test `meeting-share-request-repository.test.ts` per plan.md Testing Strategy.
 
 ## Phase 2: `requireCaller()` Helper
-- [ ] 2.1 RED+GREEN `apps/web/src/lib/sessionCaller.ts`. Test `session-caller.test.ts` per plan.md Testing Strategy.
-- [ ] 2.2 Replace both duplicated `requireCallerId()` in `app/actions/shares.ts` and `grants.ts` with `requireCaller()`.
+- [x] 2.1 RED+GREEN `apps/web/src/lib/sessionCaller.ts`. Test `session-caller.test.ts` per plan.md Testing Strategy.
+- [x] 2.2 Replace both duplicated `requireCallerId()` in `app/actions/shares.ts` and `grants.ts` with `requireCaller()`.
 
 ## Phase 3: `ShareRequestService` (TDD)
 - [ ] 3.1 RED+GREEN `apps/web/src/services/shareRequestService.ts` (contract per plan.md Interfaces). Test `share-request-service.test.ts` — all cases per plan.md Testing Strategy row (includes admin-gate assertions, no separate test needed).

@@ -1,21 +1,12 @@
 "use server";
 
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/auth";
+import { requireCaller } from "@/lib/sessionCaller";
 import type { CreateShareInput } from "@/integrations/sharing/types";
 import { MeetingShareService } from "@/services/meetingShareService";
 
-async function requireCallerId(): Promise<string> {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
-  return session.user.id;
-}
-
 export async function createShareAction(input: CreateShareInput) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     const result = await MeetingShareService.createShare(input, callerId);
     return { success: true, share: result };
   } catch (error: unknown) {
@@ -26,7 +17,7 @@ export async function createShareAction(input: CreateShareInput) {
 
 export async function revokeShareAction(shareId: string) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     await MeetingShareService.revokeShare(shareId, callerId);
     return { success: true };
   } catch (error: unknown) {

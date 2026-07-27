@@ -1,16 +1,7 @@
 "use server";
 
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/auth";
+import { requireCaller } from "@/lib/sessionCaller";
 import { MeetingAccessGrantService } from "@/services/meetingAccessGrantService";
-
-async function requireCallerId(): Promise<string> {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
-  return session.user.id;
-}
 
 export async function createGrantAction(input: {
   meetingId: string;
@@ -19,7 +10,7 @@ export async function createGrantAction(input: {
   noExpiry?: boolean;
 }) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     const result = await MeetingAccessGrantService.createGrant({ callerId, ...input });
     return { success: true, grant: result };
   } catch (error: unknown) {
@@ -30,7 +21,7 @@ export async function createGrantAction(input: {
 
 export async function revokeGrantAction(grantId: string) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     await MeetingAccessGrantService.revokeGrant({ callerId, grantId });
     return { success: true };
   } catch (error: unknown) {
@@ -41,7 +32,7 @@ export async function revokeGrantAction(grantId: string) {
 
 export async function listGrantsAction(meetingId: string) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     const grants = await MeetingAccessGrantService.listGrantsByMeetingId(callerId, meetingId);
     return { success: true, grants };
   } catch (error: unknown) {
