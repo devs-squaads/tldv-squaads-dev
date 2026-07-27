@@ -34,6 +34,7 @@ import { useRouter } from "next/navigation";
 import { ChapterVideoPlayer, type Chapter } from "./ChapterVideoPlayer";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
 import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
+import { InfoModal, type InfoModalVariant } from "@/components/ui/InfoModal";
 
 interface Meeting {
   id: string;
@@ -165,6 +166,7 @@ export function MeetingDetailsView({
   const [latestShareUrl, setLatestShareUrl] = useState<string | null>(null);
   const [renewOptionsByShareId, setRenewOptionsByShareId] = useState<Record<string, string>>({});
   const [activeChapterIdx, setActiveChapterIdx] = useState(0);
+  const [infoModal, setInfoModal] = useState<{ variant: InfoModalVariant; message: string } | null>(null);
   const seekToTimeRef = useRef<((time: number) => void) | null>(null);
   const router = useRouter();
 
@@ -180,7 +182,7 @@ export function MeetingDetailsView({
     try {
       const result = await reprocessMeetingAction(meeting.id);
       if (!result.success) {
-        alert("Error al reprocesar: " + result.error);
+        setInfoModal({ variant: "error", message: "Error al reprocesar: " + result.error });
         setMeeting((m) => ({ ...m, status: priorStatus }));
       }
     } catch (err) {
@@ -199,7 +201,7 @@ export function MeetingDetailsView({
         router.push("/");
         router.refresh();
       } else {
-        alert("Error al eliminar: " + result.error);
+        setInfoModal({ variant: "error", message: "Error al eliminar: " + result.error });
         setIsDeleting(false);
         setShowConfirmDelete(false);
       }
@@ -220,7 +222,7 @@ export function MeetingDetailsView({
         setRefinePrompt("");
         setShowRefineInput(false);
       } else {
-        alert("Error: " + result.error);
+        setInfoModal({ variant: "error", message: "Error: " + result.error });
       }
     } catch (err) {
       console.error(err);
@@ -280,7 +282,7 @@ export function MeetingDetailsView({
               expiresInDays: effectiveAccessType === "temporary" ? expiresInDays : undefined,
             });
             if (!result.success) {
-              alert(`Error al procesar a ${recipient.email}: ${result.error}`);
+              setInfoModal({ variant: "error", message: `Error al procesar a ${recipient.email}: ${result.error}` });
               setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "error" }));
               continue;
             }
@@ -312,7 +314,7 @@ export function MeetingDetailsView({
               expiresInDays: effectiveAccessType === "temporary" ? expiresInDays : undefined,
             });
             if (!result.success) {
-              alert(`Error al procesar a ${recipient.email}: ${result.error}`);
+              setInfoModal({ variant: "error", message: `Error al procesar a ${recipient.email}: ${result.error}` });
               setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "error" }));
               continue;
             }
@@ -361,7 +363,7 @@ export function MeetingDetailsView({
     try {
       const result = await cancelShareRequestAction(requestId);
       if (!result.success) {
-        alert(`Error al cancelar la solicitud: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al cancelar la solicitud: ${result.error}` });
         return;
       }
       const now = new Date();
@@ -378,7 +380,7 @@ export function MeetingDetailsView({
     try {
       const result = await revokeGrantAction(grant.id);
       if (!result.success) {
-        alert(`Error al revocar acceso: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al revocar acceso: ${result.error}` });
         return;
       }
       const now = new Date();
@@ -393,7 +395,7 @@ export function MeetingDetailsView({
     try {
       const result = await revokeShareAction(share.id);
       if (!result.success) {
-        alert(`Error al revocar enlace: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al revocar enlace: ${result.error}` });
         return;
       }
 
@@ -419,7 +421,7 @@ export function MeetingDetailsView({
     try {
       const result = await resendShareInviteAction(share.id);
       if (!result.success) {
-        alert(`Error al reenviar: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al reenviar: ${result.error}` });
         return;
       }
       if ("shareUrl" in result && result.shareUrl) {
@@ -438,7 +440,7 @@ export function MeetingDetailsView({
     const noExpiry = selected === "none";
     const parsedTtl = Number(selected);
     if (!noExpiry && (!Number.isInteger(parsedTtl) || !configuredTtlOptions.includes(parsedTtl))) {
-      alert("Selecciona un TTL válido para renovar el acceso.");
+      setInfoModal({ variant: "info", message: "Selecciona un TTL válido para renovar el acceso." });
       return;
     }
 
@@ -456,7 +458,7 @@ export function MeetingDetailsView({
       });
 
       if (!result.success || !("shareUrl" in result)) {
-        alert(`Error al renovar acceso: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al renovar acceso: ${result.error}` });
         return;
       }
 
@@ -495,13 +497,13 @@ export function MeetingDetailsView({
     try {
       const result = await clearInactiveSharesAction(meeting.id);
       if (!result.success || !("deletedCount" in result)) {
-        alert(`Error al limpiar enlaces inactivos: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al limpiar enlaces inactivos: ${result.error}` });
         return;
       }
 
       setShares((prev) => prev.filter((share) => share.status === "active"));
       if (result.deletedCount === 0) {
-        alert("No había enlaces inactivos para limpiar.");
+        setInfoModal({ variant: "info", message: "No había enlaces inactivos para limpiar." });
       }
     } finally {
       setIsClearingInactive(false);
@@ -515,7 +517,7 @@ export function MeetingDetailsView({
     try {
       const result = await deleteShareAction(share.id);
       if (!result.success) {
-        alert(`Error al eliminar enlace: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al eliminar enlace: ${result.error}` });
         return;
       }
       setShares((prev) => prev.filter((item) => item.id !== share.id));
@@ -531,7 +533,7 @@ export function MeetingDetailsView({
     try {
       const result = await deleteShareRequestAction(requestId);
       if (!result.success) {
-        alert(`Error al eliminar la solicitud: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al eliminar la solicitud: ${result.error}` });
         return;
       }
       setShareRequests((prev) => prev.filter((r) => r.id !== requestId));
@@ -550,12 +552,12 @@ export function MeetingDetailsView({
     try {
       const result = await clearResolvedShareRequestsAction(meeting.id);
       if (!result.success || !("deletedCount" in result)) {
-        alert(`Error al limpiar solicitudes: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al limpiar solicitudes: ${result.error}` });
         return;
       }
       setShareRequests((prev) => prev.filter((r) => r.status === "pending"));
       if (result.deletedCount === 0) {
-        alert("No había solicitudes resueltas para limpiar.");
+        setInfoModal({ variant: "info", message: "No había solicitudes resueltas para limpiar." });
       }
     } finally {
       setIsClearingResolvedRequests(false);
@@ -569,7 +571,7 @@ export function MeetingDetailsView({
     try {
       const result = await deleteGrantAction(grant.id);
       if (!result.success) {
-        alert(`Error al eliminar acceso: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al eliminar acceso: ${result.error}` });
         return;
       }
       setGrants((prev) => prev.filter((g) => g.id !== grant.id));
@@ -588,13 +590,13 @@ export function MeetingDetailsView({
     try {
       const result = await clearInactiveGrantsAction(meeting.id);
       if (!result.success || !("deletedCount" in result)) {
-        alert(`Error al limpiar accesos inactivos: ${result.error}`);
+        setInfoModal({ variant: "error", message: `Error al limpiar accesos inactivos: ${result.error}` });
         return;
       }
       const now = Date.now();
       setGrants((prev) => prev.filter((g) => !g.revokedAt && (!g.expiresAt || g.expiresAt.getTime() > now)));
       if (result.deletedCount === 0) {
-        alert("No había accesos inactivos para limpiar.");
+        setInfoModal({ variant: "info", message: "No había accesos inactivos para limpiar." });
       }
     } finally {
       setIsClearingInactiveGrants(false);
@@ -967,7 +969,7 @@ export function MeetingDetailsView({
               if (result.success) {
                 setMeeting((m) => ({ ...m, status: "pending", errorMessage: null }));
               } else {
-                alert("Error al reintentar: " + result.error);
+                setInfoModal({ variant: "error", message: "Error al reintentar: " + result.error });
               }
             }}>
               <Play className="h-3.5 w-3.5" />
@@ -1550,6 +1552,13 @@ export function MeetingDetailsView({
           </CardContent>
         )}
       </Card>
+
+      <InfoModal
+        open={infoModal !== null}
+        variant={infoModal?.variant ?? "info"}
+        message={infoModal?.message ?? ""}
+        onClose={() => setInfoModal(null)}
+      />
     </div>
   );
 }
