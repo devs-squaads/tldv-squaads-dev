@@ -40,11 +40,11 @@ Chain strategy: feature-branch-chain
 - [x] 3.1 RED+GREEN `apps/web/src/services/shareRequestService.ts` (contract per plan.md Interfaces). Test `share-request-service.test.ts` — all cases per plan.md Testing Strategy row (includes admin-gate assertions, no separate test needed).
 
 ## Phase 4: Role Branch in Existing Services
-- [ ] 4.1 RED+GREEN `meetingShareService.ts`: `callerRole?` guard (member throws), `singleUse` persist + revoke-on-first-verify in `verifyRestrictedAccess`. Extend `meeting-share-service.test.ts` per plan.md.
-- [ ] 4.2 RED+GREEN `meetingAccessGrantService.ts`: `callerRole?` guard (member throws), accessType→TTL mapping (permanent→noExpiry, temporary→days*1440). Extend `meeting-access-grant-service.test.ts` per plan.md.
-- [ ] 4.3 `integrations/sharing/types.ts`: `CreateShareInput.singleUse?: boolean`.
-- [ ] 4.4 `app/actions/shares.ts`, `grants.ts`: member Owner → `ShareRequestService`, admin Owner → direct create; revoke stays direct for both roles.
-- [ ] 4.5 `app/actions/shareRequests.ts` (new): create/cancel/approve/reject/listByMeeting/listPending actions.
+- [x] 4.1 RED+GREEN `meetingShareService.ts`: `callerRole?` guard (member throws), `singleUse` persist + revoke-on-first-verify in `verifyRestrictedAccess`. Extend `meeting-share-service.test.ts` per plan.md.
+- [x] 4.2 RED+GREEN `meetingAccessGrantService.ts`: `callerRole?` guard (member throws), accessType→TTL mapping (permanent→noExpiry, temporary→days*1440). Extend `meeting-access-grant-service.test.ts` per plan.md.
+- [x] 4.3 `integrations/sharing/types.ts`: `CreateShareInput.singleUse?: boolean`.
+- [x] 4.4 `app/actions/shares.ts`, `grants.ts`: member Owner → `ShareRequestService`, admin Owner → direct create; revoke stays direct for both roles.
+- [x] 4.5 `app/actions/shareRequests.ts` (new): create/cancel/approve/reject/listByMeeting/listPending actions.
 
 ## Phase 5: `SmtpEmailProvider` (TDD)
 - [ ] 5.1 `apps/web/package.json`: add `nodemailer` + `@types/nodemailer` (dev).

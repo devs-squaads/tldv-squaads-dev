@@ -110,10 +110,16 @@ export class ShareRequestService {
     const ttl = resolveTtlFromAccessType(request.accessType, request.expiresInDays);
 
     if (request.granteeUserId) {
+      // 013/Phase 4.2: accessType + expiresInDays are passed through additively (alongside the
+      // legacy ttl spread below) so createGrant's own accessType mapping bypasses shareTtl.ts's
+      // fixed TTL menu for arbitrary day counts — closes the gap flagged when this branch only
+      // had ttlMinutes/noExpiry to work with (PR2).
       const grant = await MeetingAccessGrantService.createGrant({
         callerId: request.requesterId,
         meetingId: request.meetingId,
         granteeUserId: request.granteeUserId,
+        accessType: request.accessType,
+        expiresInDays: request.expiresInDays ?? undefined,
         ...ttl,
       });
       await MeetingShareRequestRepository.resolve(requestId, {
@@ -127,11 +133,20 @@ export class ShareRequestService {
     // singleUse is passed through for CreateShareInput to honor once Phase 4 (013-04) wires
     // singleUse into the type + persistence; the current createShare simply ignores unknown
     // properties on its input until then.
+    // 013/Phase 4.2 follow-up (PR3 fix): accessType + expiresInDays are passed through
+    // additively (alongside the legacy ttl spread below) so createShare's own accessType
+    // mapping bypasses shareTtl.ts's fixed TTL menu for arbitrary day counts — closes the gap
+    // flagged when this branch only had ttlMinutes/noExpiry to work with (PR3, mirrors the
+    // registered-recipient branch's identical fix above). accessType stays "single_use"-safe:
+    // createShare only routes temporary/permanent through this mechanism, so it never
+    // conflicts with the singleUse field set above.
     const shareInput = {
       meetingId: request.meetingId,
       shareType: "restricted_email" as const,
       recipientEmail: request.recipientEmail ?? undefined,
       singleUse: request.accessType === "single_use",
+      accessType: request.accessType,
+      expiresInDays: request.expiresInDays ?? undefined,
       ...ttl,
     };
     const share = await MeetingShareService.createShare(shareInput, request.requesterId);
