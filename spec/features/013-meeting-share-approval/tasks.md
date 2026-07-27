@@ -52,11 +52,11 @@ Chain strategy: feature-branch-chain
 - [ ] 5.3 `integrations/email/EmailProviderFactory.ts`: add `"smtp"` case.
 
 ## Phase 6: UI Wiring
-- [ ] 6.1 `components/AppHeader.tsx` (new): extract shared header from the 3 duplicated inline headers.
-- [ ] 6.2 `components/PendingRequestsBell.tsx` (new): admin-only, badge = `countPending()`, links to admin page.
-- [ ] 6.3 Swap headers in `app/(main)/page.tsx`, `settings/page.tsx`, `meeting/[id]/page.tsx` for `AppHeader`; meeting page also fetches grants + share requests into props.
-- [ ] 6.4 `app/(main)/admin/share-requests/page.tsx` (new): `force-dynamic`; no session → `/login`; non-admin → `/`.
-- [ ] 6.5 `components/AdminShareRequestsView.tsx` (new): pending list, approve/reject.
+- [x] 6.1 `components/AppHeader.tsx` (new): extract shared header from the 3 duplicated inline headers.
+- [x] 6.2 `components/PendingRequestsBell.tsx` (new): admin-only, badge = `countPending()`, links to admin page.
+- [x] 6.3 Swap headers in `app/(main)/page.tsx`, `settings/page.tsx`, `meeting/[id]/page.tsx` for `AppHeader`; meeting page also fetches grants + share requests into props. (Header swap done this PR; the grants+share-requests prop fetch is deferred to PR6, which is the first PR that changes `MeetingDetailsView.tsx` to actually consume those new props — passing them earlier would be dead data with no test surface.)
+- [x] 6.4 `app/(main)/admin/share-requests/page.tsx` (new): `force-dynamic`; no session → `/login`; non-admin → `/`.
+- [x] 6.5 `components/AdminShareRequestsView.tsx` (new): pending list, approve/reject.
 - [ ] 6.6 `components/MeetingDetailsView.tsx`: 3 recipient modes (all/subset/email), access-type + day controls, member pending/cancel state, new "Solicitudes y accesos" section (all-statuses requests + grants list).
 
 ## Phase 7: Chat Tool Role-Awareness
