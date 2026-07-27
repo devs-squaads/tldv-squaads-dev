@@ -37,7 +37,7 @@ Chain strategy: feature-branch-chain
 - [x] 2.2 Replace both duplicated `requireCallerId()` in `app/actions/shares.ts` and `grants.ts` with `requireCaller()`.
 
 ## Phase 3: `ShareRequestService` (TDD)
-- [ ] 3.1 RED+GREEN `apps/web/src/services/shareRequestService.ts` (contract per plan.md Interfaces). Test `share-request-service.test.ts` — all cases per plan.md Testing Strategy row (includes admin-gate assertions, no separate test needed).
+- [x] 3.1 RED+GREEN `apps/web/src/services/shareRequestService.ts` (contract per plan.md Interfaces). Test `share-request-service.test.ts` — all cases per plan.md Testing Strategy row (includes admin-gate assertions, no separate test needed).
 
 ## Phase 4: Role Branch in Existing Services
 - [ ] 4.1 RED+GREEN `meetingShareService.ts`: `callerRole?` guard (member throws), `singleUse` persist + revoke-on-first-verify in `verifyRestrictedAccess`. Extend `meeting-share-service.test.ts` per plan.md.
