@@ -35,6 +35,7 @@ import { ChapterVideoPlayer, type Chapter } from "./ChapterVideoPlayer";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
 import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
 import { InfoModal, type InfoModalVariant } from "@/components/ui/InfoModal";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 
 interface Meeting {
   id: string;
@@ -167,8 +168,16 @@ export function MeetingDetailsView({
   const [renewOptionsByShareId, setRenewOptionsByShareId] = useState<Record<string, string>>({});
   const [activeChapterIdx, setActiveChapterIdx] = useState(0);
   const [infoModal, setInfoModal] = useState<{ variant: InfoModalVariant; message: string } | null>(null);
+  const [confirmState, setConfirmState] = useState<{ message: string; resolve: (value: boolean) => void } | null>(
+    null
+  );
   const seekToTimeRef = useRef<((time: number) => void) | null>(null);
   const router = useRouter();
+
+  // Promise-based replacement for window.confirm() — keeps each call site's synchronous-looking
+  // `if (!(await requestConfirm(message))) return;` early-return shape.
+  const requestConfirm = (message: string): Promise<boolean> =>
+    new Promise((resolve) => setConfirmState({ message, resolve }));
 
   const canReprocess =
     (meeting.status === "completed" || meeting.status === "transcription_error") &&
@@ -412,7 +421,7 @@ export function MeetingDetailsView({
 
   const handleResendShare = async (share: MeetingShare) => {
     const recipientSuffix = share.recipientEmail ? ` a ${share.recipientEmail}` : "";
-    const confirmed = window.confirm(
+    const confirmed = await requestConfirm(
       `Se enviará un nuevo enlace de acceso${recipientSuffix}. El enlace anterior quedará invalidado. ¿Deseas continuar?`
     );
     if (!confirmed) return;
@@ -447,7 +456,7 @@ export function MeetingDetailsView({
     const confirmMessage = noExpiry
       ? "Se renovará este acceso sin caducidad. La URL actual se conservará. ¿Deseas continuar?"
       : `Se renovará este acceso durante ${formatTtlLabel(parsedTtl)}. La URL actual se conservará. ¿Deseas continuar?`;
-    if (!window.confirm(confirmMessage)) return;
+    if (!(await requestConfirm(confirmMessage))) return;
 
     setActiveShareActionId(share.id);
     try {
@@ -488,7 +497,7 @@ export function MeetingDetailsView({
   };
 
   const handleClearInactiveShares = async () => {
-    const confirmed = window.confirm(
+    const confirmed = await requestConfirm(
       "Se eliminarán los registros de todos los enlaces revocados y caducados. Esta acción es irreversible. ¿Deseas continuar?"
     );
     if (!confirmed) return;
@@ -511,7 +520,7 @@ export function MeetingDetailsView({
   };
 
   const handleDeleteShare = async (share: MeetingShare) => {
-    if (!window.confirm("Se eliminará este registro de enlace. Esta acción es irreversible. ¿Deseas continuar?")) return;
+    if (!(await requestConfirm("Se eliminará este registro de enlace. Esta acción es irreversible. ¿Deseas continuar?"))) return;
 
     setActiveShareActionId(share.id);
     try {
@@ -527,7 +536,7 @@ export function MeetingDetailsView({
   };
 
   const handleDeleteShareRequest = async (requestId: string) => {
-    if (!window.confirm("Se eliminará este registro de solicitud. Esta acción es irreversible. ¿Deseas continuar?")) return;
+    if (!(await requestConfirm("Se eliminará este registro de solicitud. Esta acción es irreversible. ¿Deseas continuar?"))) return;
 
     setCancellingRequestId(requestId);
     try {
@@ -543,7 +552,7 @@ export function MeetingDetailsView({
   };
 
   const handleClearResolvedShareRequests = async () => {
-    const confirmed = window.confirm(
+    const confirmed = await requestConfirm(
       "Se eliminarán los registros de todas las solicitudes resueltas (aprobadas, rechazadas o canceladas). Esta acción es irreversible. ¿Deseas continuar?"
     );
     if (!confirmed) return;
@@ -565,7 +574,7 @@ export function MeetingDetailsView({
   };
 
   const handleDeleteGrant = async (grant: MeetingGrant) => {
-    if (!window.confirm("Se eliminará este registro de acceso. Esta acción es irreversible. ¿Deseas continuar?")) return;
+    if (!(await requestConfirm("Se eliminará este registro de acceso. Esta acción es irreversible. ¿Deseas continuar?"))) return;
 
     setActiveGrantActionId(grant.id);
     try {
@@ -581,7 +590,7 @@ export function MeetingDetailsView({
   };
 
   const handleClearInactiveGrants = async () => {
-    const confirmed = window.confirm(
+    const confirmed = await requestConfirm(
       "Se eliminarán los registros de todos los accesos revocados y caducados. Esta acción es irreversible. ¿Deseas continuar?"
     );
     if (!confirmed) return;
@@ -1558,6 +1567,19 @@ export function MeetingDetailsView({
         variant={infoModal?.variant ?? "info"}
         message={infoModal?.message ?? ""}
         onClose={() => setInfoModal(null)}
+      />
+
+      <ConfirmModal
+        open={confirmState !== null}
+        message={confirmState?.message ?? ""}
+        onConfirm={() => {
+          confirmState?.resolve(true);
+          setConfirmState(null);
+        }}
+        onCancel={() => {
+          confirmState?.resolve(false);
+          setConfirmState(null);
+        }}
       />
     </div>
   );
