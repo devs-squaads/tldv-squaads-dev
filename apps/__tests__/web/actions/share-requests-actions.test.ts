@@ -20,6 +20,8 @@ const mockApproveShareRequest = mock(() => Promise.resolve());
 const mockRejectShareRequest = mock(() => Promise.resolve());
 const mockListByMeetingId = mock(() => Promise.resolve([{ id: "request-1" }]));
 const mockListPending = mock(() => Promise.resolve([{ id: "request-1" }]));
+const mockDeleteShareRequest = mock(() => Promise.resolve());
+const mockClearResolvedShareRequests = mock(() => Promise.resolve({ deletedCount: 0 }));
 
 bunMock.module("@/services/shareRequestService", () => ({
   ShareRequestService: {
@@ -29,6 +31,8 @@ bunMock.module("@/services/shareRequestService", () => ({
     rejectShareRequest: mockRejectShareRequest,
     listByMeetingId: mockListByMeetingId,
     listPending: mockListPending,
+    deleteShareRequest: mockDeleteShareRequest,
+    clearResolvedShareRequests: mockClearResolvedShareRequests,
   },
 }));
 
@@ -39,6 +43,8 @@ const {
   rejectShareRequestAction,
   listShareRequestsByMeetingIdAction,
   listPendingShareRequestsAction,
+  deleteShareRequestAction,
+  clearResolvedShareRequestsAction,
 } = await import("../../../../apps/web/src/app/actions/shareRequests");
 
 describe("shareRequests actions (013/Phase 4.5)", () => {
@@ -50,6 +56,8 @@ describe("shareRequests actions (013/Phase 4.5)", () => {
     mockRejectShareRequest.mockClear();
     mockListByMeetingId.mockClear();
     mockListPending.mockClear();
+    mockDeleteShareRequest.mockClear();
+    mockClearResolvedShareRequests.mockClear();
   });
 
   describe("createShareRequestAction", () => {
@@ -152,6 +160,37 @@ describe("shareRequests actions (013/Phase 4.5)", () => {
 
       expect(result.success).toBe(false);
       expect(mockListPending).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("deleteShareRequestAction", () => {
+    it("threads the session caller id and request id", async () => {
+      mockGetServerSession.mockResolvedValueOnce({ user: { id: "owner-1", role: "member" } });
+
+      const result = await deleteShareRequestAction("request-1");
+
+      expect(result.success).toBe(true);
+      expect(mockDeleteShareRequest).toHaveBeenCalledWith("request-1", "owner-1");
+    });
+
+    it("surfaces the service's own rejection", async () => {
+      mockGetServerSession.mockResolvedValueOnce({ user: { id: "owner-1", role: "member" } });
+      mockDeleteShareRequest.mockRejectedValueOnce(new Error("Only a resolved share request can be deleted"));
+
+      const result = await deleteShareRequestAction("request-1");
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("clearResolvedShareRequestsAction", () => {
+    it("threads the session caller id and meeting id", async () => {
+      mockGetServerSession.mockResolvedValueOnce({ user: { id: "owner-1", role: "member" } });
+
+      const result = await clearResolvedShareRequestsAction("meeting-1");
+
+      expect(result.success).toBe(true);
+      expect(mockClearResolvedShareRequests).toHaveBeenCalledWith("meeting-1", "owner-1");
     });
   });
 });

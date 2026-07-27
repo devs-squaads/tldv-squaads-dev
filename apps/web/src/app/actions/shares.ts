@@ -78,3 +78,14 @@ export async function clearInactiveSharesAction(meetingId: string) {
     return { success: false, error: message };
   }
 }
+
+export async function deleteShareAction(shareId: string) {
+  try {
+    const { id: callerId } = await requireCaller();
+    await MeetingShareService.deleteShare(shareId, callerId);
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error deleting share";
+    return { success: false, error: message };
+  }
+}

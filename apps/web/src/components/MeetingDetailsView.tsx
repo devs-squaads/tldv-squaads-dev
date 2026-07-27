@@ -16,9 +16,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { deleteMeetingAction, reprocessMeetingAction, refineSummaryAction, retryMeetingAction } from "@/app/actions/bot";
-import { clearInactiveSharesAction, createShareAction, renewShareAccessAction, resendShareInviteAction, revokeShareAction } from "@/app/actions/shares";
-import { createGrantAction, revokeGrantAction } from "@/app/actions/grants";
-import { cancelShareRequestAction } from "@/app/actions/shareRequests";
+import { clearInactiveSharesAction, createShareAction, deleteShareAction, renewShareAccessAction, resendShareInviteAction, revokeShareAction } from "@/app/actions/shares";
+import { clearInactiveGrantsAction, createGrantAction, deleteGrantAction, revokeGrantAction } from "@/app/actions/grants";
+import { cancelShareRequestAction, clearResolvedShareRequestsAction, deleteShareRequestAction } from "@/app/actions/shareRequests";
 import { resolveRecipientAction } from "@/app/actions/recipients";
 import type { ShareRequestRecord, ShareRequestAccessType } from "@/services/shareRequestService";
 import {
@@ -157,6 +157,8 @@ export function MeetingDetailsView({
   >({});
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isClearingInactive, setIsClearingInactive] = useState(false);
+  const [isClearingResolvedRequests, setIsClearingResolvedRequests] = useState(false);
+  const [isClearingInactiveGrants, setIsClearingInactiveGrants] = useState(false);
   const [activeShareActionId, setActiveShareActionId] = useState<string | null>(null);
   const [activeGrantActionId, setActiveGrantActionId] = useState<string | null>(null);
   const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);
@@ -506,6 +508,99 @@ export function MeetingDetailsView({
     }
   };
 
+  const handleDeleteShare = async (share: MeetingShare) => {
+    if (!window.confirm("Se eliminará este registro de enlace. Esta acción es irreversible. ¿Deseas continuar?")) return;
+
+    setActiveShareActionId(share.id);
+    try {
+      const result = await deleteShareAction(share.id);
+      if (!result.success) {
+        alert(`Error al eliminar enlace: ${result.error}`);
+        return;
+      }
+      setShares((prev) => prev.filter((item) => item.id !== share.id));
+    } finally {
+      setActiveShareActionId(null);
+    }
+  };
+
+  const handleDeleteShareRequest = async (requestId: string) => {
+    if (!window.confirm("Se eliminará este registro de solicitud. Esta acción es irreversible. ¿Deseas continuar?")) return;
+
+    setCancellingRequestId(requestId);
+    try {
+      const result = await deleteShareRequestAction(requestId);
+      if (!result.success) {
+        alert(`Error al eliminar la solicitud: ${result.error}`);
+        return;
+      }
+      setShareRequests((prev) => prev.filter((r) => r.id !== requestId));
+    } finally {
+      setCancellingRequestId(null);
+    }
+  };
+
+  const handleClearResolvedShareRequests = async () => {
+    const confirmed = window.confirm(
+      "Se eliminarán los registros de todas las solicitudes resueltas (aprobadas, rechazadas o canceladas). Esta acción es irreversible. ¿Deseas continuar?"
+    );
+    if (!confirmed) return;
+
+    setIsClearingResolvedRequests(true);
+    try {
+      const result = await clearResolvedShareRequestsAction(meeting.id);
+      if (!result.success || !("deletedCount" in result)) {
+        alert(`Error al limpiar solicitudes: ${result.error}`);
+        return;
+      }
+      setShareRequests((prev) => prev.filter((r) => r.status === "pending"));
+      if (result.deletedCount === 0) {
+        alert("No había solicitudes resueltas para limpiar.");
+      }
+    } finally {
+      setIsClearingResolvedRequests(false);
+    }
+  };
+
+  const handleDeleteGrant = async (grant: MeetingGrant) => {
+    if (!window.confirm("Se eliminará este registro de acceso. Esta acción es irreversible. ¿Deseas continuar?")) return;
+
+    setActiveGrantActionId(grant.id);
+    try {
+      const result = await deleteGrantAction(grant.id);
+      if (!result.success) {
+        alert(`Error al eliminar acceso: ${result.error}`);
+        return;
+      }
+      setGrants((prev) => prev.filter((g) => g.id !== grant.id));
+    } finally {
+      setActiveGrantActionId(null);
+    }
+  };
+
+  const handleClearInactiveGrants = async () => {
+    const confirmed = window.confirm(
+      "Se eliminarán los registros de todos los accesos revocados y caducados. Esta acción es irreversible. ¿Deseas continuar?"
+    );
+    if (!confirmed) return;
+
+    setIsClearingInactiveGrants(true);
+    try {
+      const result = await clearInactiveGrantsAction(meeting.id);
+      if (!result.success || !("deletedCount" in result)) {
+        alert(`Error al limpiar accesos inactivos: ${result.error}`);
+        return;
+      }
+      const now = Date.now();
+      setGrants((prev) => prev.filter((g) => !g.revokedAt && (!g.expiresAt || g.expiresAt.getTime() > now)));
+      if (result.deletedCount === 0) {
+        alert("No había accesos inactivos para limpiar.");
+      }
+    } finally {
+      setIsClearingInactiveGrants(false);
+    }
+  };
+
   const exportMarkdown = () => {
     if (!parsedSummary) return;
     const lines = [
@@ -590,6 +685,10 @@ export function MeetingDetailsView({
 
   const restrictedShares = shares.filter((share) => share.shareType === "restricted_email");
   const inactiveSharesCount = shares.filter((share) => share.status !== "active").length;
+  const resolvedRequestsCount = shareRequests.filter((request) => request.status !== "pending").length;
+  const isInactiveGrant = (grant: MeetingGrant) =>
+    Boolean(grant.revokedAt) || (grant.expiresAt !== null && grant.expiresAt.getTime() <= Date.now());
+  const inactiveGrantsCount = grants.filter(isInactiveGrant).length;
 
   const renderShareRow = (share: MeetingShare) => (
     <div key={share.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 space-y-2">
@@ -663,6 +762,18 @@ export function MeetingDetailsView({
               Revocar
             </Button>
           )}
+          {share.status !== "active" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1"
+              onClick={() => handleDeleteShare(share)}
+              disabled={activeShareActionId === share.id}
+            >
+              {activeShareActionId === share.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              Eliminar
+            </Button>
+          )}
         </div>
       </div>
       <div className="text-xs text-[var(--muted-foreground)] flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -704,6 +815,18 @@ export function MeetingDetailsView({
               {cancellingRequestId === request.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Cancelar"}
             </Button>
           )}
+          {request.status !== "pending" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-2 gap-1"
+              onClick={() => handleDeleteShareRequest(request.id)}
+              disabled={cancellingRequestId === request.id}
+            >
+              {cancellingRequestId === request.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              Eliminar
+            </Button>
+          )}
         </div>
       </div>
       <p className="text-xs text-[var(--muted-foreground)]">
@@ -738,6 +861,18 @@ export function MeetingDetailsView({
                 disabled={activeGrantActionId === grant.id}
               >
                 {activeGrantActionId === grant.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Revocar"}
+              </Button>
+            )}
+            {(isRevoked || isExpired) && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] px-2 gap-1"
+                onClick={() => handleDeleteGrant(grant)}
+                disabled={activeGrantActionId === grant.id}
+              >
+                {activeGrantActionId === grant.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                Eliminar
               </Button>
             )}
           </div>
@@ -1353,7 +1488,7 @@ export function MeetingDetailsView({
               {restrictedShares.length === 0 ? (
                 <p className="text-sm text-[var(--muted-foreground)]">No hay enlaces restringidos por email.</p>
               ) : (
-                restrictedShares.map(renderShareRow)
+                <div className="max-h-72 overflow-y-auto space-y-2 pr-1">{restrictedShares.map(renderShareRow)}</div>
               )}
             </div>
 
@@ -1362,7 +1497,19 @@ export function MeetingDetailsView({
                 existing restricted_email share list). All-statuses Share Request list + a minimal
                 Access Grants list, per sdd-design's resolution. */}
             <div className="rounded-xl border border-purple-500/25 bg-purple-500/5 p-4 space-y-3">
-              <h4 className="text-sm font-semibold">Solicitudes y accesos</h4>
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold">Solicitudes y accesos</h4>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={handleClearResolvedShareRequests}
+                  disabled={isClearingResolvedRequests || resolvedRequestsCount === 0}
+                >
+                  {isClearingResolvedRequests ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {isClearingResolvedRequests ? "Limpiando..." : `Limpiar solicitudes resueltas (${resolvedRequestsCount})`}
+                </Button>
+              </div>
               {shareRequests.length === 0 && grants.length === 0 ? (
                 <p className="text-sm text-[var(--muted-foreground)]">
                   No hay solicitudes ni accesos otorgados a usuarios registrados.
@@ -1372,15 +1519,29 @@ export function MeetingDetailsView({
                   {shareRequests.length > 0 && (
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-[var(--muted-foreground)]">Solicitudes de compartición</p>
-                      {shareRequests.map(renderShareRequestRow)}
+                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                        {shareRequests.map(renderShareRequestRow)}
+                      </div>
                     </div>
                   )}
                   {grants.length > 0 && (
                     <div className="space-y-2">
-                      <p className="text-xs font-medium text-[var(--muted-foreground)]">
-                        Accesos otorgados a usuarios registrados
-                      </p>
-                      {grants.map(renderGrantRow)}
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-[var(--muted-foreground)]">
+                          Accesos otorgados a usuarios registrados
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-[10px] px-2 gap-1"
+                          onClick={handleClearInactiveGrants}
+                          disabled={isClearingInactiveGrants || inactiveGrantsCount === 0}
+                        >
+                          {isClearingInactiveGrants ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          {isClearingInactiveGrants ? "Limpiando..." : `Limpiar accesos inactivos (${inactiveGrantsCount})`}
+                        </Button>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">{grants.map(renderGrantRow)}</div>
                     </div>
                   )}
                 </>

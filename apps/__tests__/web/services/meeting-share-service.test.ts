@@ -35,15 +35,17 @@ const state: {
   shares: Record<string, ShareRow>;
   createCalls: ShareRow[];
   revokeCalls: string[];
+  deleteCalls: string[];
   signCalls: string[];
   accessLogs: string[];
-} = { meetings: {}, shares: {}, createCalls: [], revokeCalls: [], signCalls: [], accessLogs: [] };
+} = { meetings: {}, shares: {}, createCalls: [], revokeCalls: [], deleteCalls: [], signCalls: [], accessLogs: [] };
 
 function resetState() {
   state.meetings = {};
   state.shares = {};
   state.createCalls = [];
   state.revokeCalls = [];
+  state.deleteCalls = [];
   state.signCalls = [];
   state.accessLogs = [];
 }
@@ -73,6 +75,10 @@ bunMock.module("@/repositories/MeetingShareRepository", () => ({
       if (share) {
         share.revokedAt = new Date();
       }
+    },
+    deleteById: async (id: string) => {
+      state.deleteCalls.push(id);
+      delete state.shares[id];
     },
     markAccessed: async () => {},
     insertAccessLog: async (entry: { result: string }) => {
@@ -321,6 +327,100 @@ describe("MeetingShareService", () => {
     it("rejects a non-owner caller", async () => {
       await expect(MeetingShareService.revokeShare("share-1", "intruder-1")).rejects.toThrow();
       expect(state.revokeCalls).toHaveLength(0);
+    });
+  });
+
+  describe("deleteShare", () => {
+    it("owner can delete a revoked (inactive) share", async () => {
+      state.shares["share-1"] = {
+        id: "share-1",
+        meetingId: "meeting-1",
+        shareType: "restricted_email",
+        tokenHash: "hash",
+        recipientEmail: null,
+        recipientEmailNormalized: null,
+        expiresAt: null,
+        revokedAt: new Date(),
+        createdBy: null,
+        otpHash: null,
+        otpExpiresAt: null,
+        lastAccessedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await MeetingShareService.deleteShare("share-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["share-1"]);
+    });
+
+    it("owner can delete an expired share", async () => {
+      state.shares["share-1"] = {
+        id: "share-1",
+        meetingId: "meeting-1",
+        shareType: "restricted_email",
+        tokenHash: "hash",
+        recipientEmail: null,
+        recipientEmailNormalized: null,
+        expiresAt: new Date(Date.now() - 60_000),
+        revokedAt: null,
+        createdBy: null,
+        otpHash: null,
+        otpExpiresAt: null,
+        lastAccessedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await MeetingShareService.deleteShare("share-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["share-1"]);
+    });
+
+    it("rejects deleting an active share (must revoke first)", async () => {
+      state.shares["share-1"] = {
+        id: "share-1",
+        meetingId: "meeting-1",
+        shareType: "restricted_email",
+        tokenHash: "hash",
+        recipientEmail: null,
+        recipientEmailNormalized: null,
+        expiresAt: null,
+        revokedAt: null,
+        createdBy: null,
+        otpHash: null,
+        otpExpiresAt: null,
+        lastAccessedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await expect(MeetingShareService.deleteShare("share-1", "owner-1")).rejects.toThrow();
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it("rejects a non-owner caller", async () => {
+      state.shares["share-1"] = {
+        id: "share-1",
+        meetingId: "meeting-1",
+        shareType: "restricted_email",
+        tokenHash: "hash",
+        recipientEmail: null,
+        recipientEmailNormalized: null,
+        expiresAt: null,
+        revokedAt: new Date(),
+        createdBy: null,
+        otpHash: null,
+        otpExpiresAt: null,
+        lastAccessedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await expect(MeetingShareService.deleteShare("share-1", "intruder-1")).rejects.toThrow();
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it("rejects when the share does not exist", async () => {
+      await expect(MeetingShareService.deleteShare("nope", "owner-1")).rejects.toThrow();
     });
   });
 

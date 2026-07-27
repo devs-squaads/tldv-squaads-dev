@@ -169,6 +169,34 @@ export class ShareRequestService {
     });
   }
 
+  // Owner-gated (the requester in practice — only member Owners create requests). Only a
+  // resolved (non-pending) request may be deleted; pending stays cancel/approve/reject-only.
+  static async deleteShareRequest(requestId: string, callerId?: string): Promise<void> {
+    const request = await MeetingShareRequestRepository.findById(requestId);
+    if (!request) {
+      throw new Error("Share request not found");
+    }
+    if (callerId !== undefined && request.requesterId !== callerId) {
+      throw new Error("Only the requester can delete this share request");
+    }
+    if (request.status === "pending") {
+      throw new Error("Only a resolved share request can be deleted");
+    }
+    await MeetingShareRequestRepository.deleteById(requestId);
+  }
+
+  // Mirrors MeetingShareService.clearInactiveShares's shape/return type.
+  static async clearResolvedShareRequests(meetingId: string, callerId?: string): Promise<{ deletedCount: number }> {
+    if (callerId !== undefined) {
+      const meeting = await MeetingRepository.findById(meetingId);
+      if (!meeting || meeting.ownerId !== callerId) {
+        throw new Error("Only the meeting owner can clear share requests");
+      }
+    }
+    const deletedCount = await MeetingShareRequestRepository.deleteResolvedByMeetingId(meetingId);
+    return { deletedCount };
+  }
+
   static async listPending(): Promise<ShareRequestListItem[]> {
     return MeetingShareRequestRepository.listPending();
   }

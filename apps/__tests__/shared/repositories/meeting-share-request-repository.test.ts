@@ -255,6 +255,74 @@ describe.skipIf(!dbAvailable)("MeetingShareRequestRepository CRUD (requires `bun
 
     await cleanupMeeting(request.meetingId);
   });
+
+  it("deleteById removes the row", async () => {
+    const suffix = crypto.randomUUID();
+    const request = makeRequest(suffix);
+    await MeetingShareRequestRepository.create(request);
+
+    await MeetingShareRequestRepository.deleteById(request.id);
+
+    const found = await MeetingShareRequestRepository.findById(request.id);
+    expect(found).toBeNull();
+  });
+
+  it("deleteResolvedByMeetingId removes approved/rejected/cancelled requests, keeps pending, and returns the deleted count", async () => {
+    const suffix = crypto.randomUUID();
+    const meetingId = `meeting-${suffix}`;
+    const approved = makeRequest(suffix, {
+      id: `msr-approved-${suffix}`,
+      meetingId,
+      granteeUserId: `grantee-approved-${suffix}`,
+      status: "approved",
+    });
+    const rejected = makeRequest(`${suffix}-r`, {
+      id: `msr-rejected-${suffix}`,
+      meetingId,
+      granteeUserId: `grantee-rejected-${suffix}`,
+      status: "rejected",
+    });
+    const cancelled = makeRequest(`${suffix}-c`, {
+      id: `msr-cancelled-${suffix}`,
+      meetingId,
+      granteeUserId: `grantee-cancelled-${suffix}`,
+      status: "cancelled",
+    });
+    const pending = makeRequest(`${suffix}-p`, {
+      id: `msr-pending-${suffix}`,
+      meetingId,
+      granteeUserId: `grantee-pending-${suffix}`,
+      status: "pending",
+    });
+
+    await MeetingShareRequestRepository.create(approved);
+    await MeetingShareRequestRepository.create(rejected);
+    await MeetingShareRequestRepository.create(cancelled);
+    await MeetingShareRequestRepository.create(pending);
+
+    const deletedCount = await MeetingShareRequestRepository.deleteResolvedByMeetingId(meetingId);
+
+    expect(deletedCount).toBe(3);
+    expect(await MeetingShareRequestRepository.findById(approved.id)).toBeNull();
+    expect(await MeetingShareRequestRepository.findById(rejected.id)).toBeNull();
+    expect(await MeetingShareRequestRepository.findById(cancelled.id)).toBeNull();
+    expect(await MeetingShareRequestRepository.findById(pending.id)).not.toBeNull();
+
+    await cleanupMeeting(meetingId);
+  });
+
+  it("deleteResolvedByMeetingId returns 0 when there is nothing resolved to delete", async () => {
+    const suffix = crypto.randomUUID();
+    const meetingId = `meeting-${suffix}`;
+    const pending = makeRequest(suffix, { id: `msr-pending-${suffix}`, meetingId });
+    await MeetingShareRequestRepository.create(pending);
+
+    const deletedCount = await MeetingShareRequestRepository.deleteResolvedByMeetingId(meetingId);
+
+    expect(deletedCount).toBe(0);
+
+    await cleanupMeeting(meetingId);
+  });
 });
 
 describe.skipIf(!dbAvailable)("MeetingShareRequestRepository cleanup", () => {

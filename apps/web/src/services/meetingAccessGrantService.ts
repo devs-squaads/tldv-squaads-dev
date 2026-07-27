@@ -97,4 +97,30 @@ export class MeetingAccessGrantService {
     }
     await MeetingAccessGrantRepository.revokeById(input.grantId);
   }
+
+  // Owner-gated, mirrors MeetingShareService.deleteShare's shape. Only a revoked/expired grant
+  // may be deleted — an active one must be revoked first.
+  static async deleteGrant(grantId: string, callerId?: string): Promise<void> {
+    const grant = await MeetingAccessGrantRepository.findById(grantId);
+    if (!grant) {
+      throw new Error("Access grant not found");
+    }
+    if (callerId !== undefined && grant.ownerId !== callerId) {
+      throw new Error("Only the meeting owner can manage access grants");
+    }
+    const isActive = !grant.revokedAt && (!grant.expiresAt || grant.expiresAt.getTime() > Date.now());
+    if (isActive) {
+      throw new Error("Only a revoked or expired access grant can be deleted");
+    }
+    await MeetingAccessGrantRepository.deleteById(grantId);
+  }
+
+  // Mirrors MeetingShareService.clearInactiveShares's shape/return type.
+  static async clearInactiveGrants(meetingId: string, callerId?: string): Promise<{ deletedCount: number }> {
+    if (callerId !== undefined) {
+      await requireOwnedMeeting(meetingId, callerId);
+    }
+    const deletedCount = await MeetingAccessGrantRepository.deleteInactiveByMeetingId(meetingId, new Date());
+    return { deletedCount };
+  }
 }
