@@ -1,6 +1,6 @@
 import { db } from "@meeting-bot/shared/db";
 import { meetingAccessGrants } from "@meeting-bot/shared/db/schema";
-import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
 
 export type MeetingAccessGrantRecord = typeof meetingAccessGrants.$inferSelect;
 export type MeetingAccessGrantInsert = typeof meetingAccessGrants.$inferInsert;
@@ -128,5 +128,26 @@ export class MeetingAccessGrantRepository {
         updatedAt: when,
       })
       .where(eq(meetingAccessGrants.id, id));
+  }
+
+  static async deleteById(id: string): Promise<void> {
+    await db.delete(meetingAccessGrants).where(eq(meetingAccessGrants.id, id));
+  }
+
+  static async deleteInactiveByMeetingId(meetingId: string, now: Date = new Date()): Promise<number> {
+    const deleted = await db
+      .delete(meetingAccessGrants)
+      .where(
+        and(
+          eq(meetingAccessGrants.meetingId, meetingId),
+          or(
+            isNotNull(meetingAccessGrants.revokedAt),
+            and(isNotNull(meetingAccessGrants.expiresAt), lte(meetingAccessGrants.expiresAt, now))
+          )
+        )
+      )
+      .returning({ id: meetingAccessGrants.id });
+
+    return deleted.length;
   }
 }

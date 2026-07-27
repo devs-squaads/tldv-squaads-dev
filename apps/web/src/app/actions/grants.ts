@@ -57,3 +57,25 @@ export async function listGrantsAction(meetingId: string) {
     return { success: false, error: message };
   }
 }
+
+export async function deleteGrantAction(grantId: string) {
+  try {
+    const { id: callerId } = await requireCaller();
+    await MeetingAccessGrantService.deleteGrant(grantId, callerId);
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error deleting access grant";
+    return { success: false, error: message };
+  }
+}
+
+export async function clearInactiveGrantsAction(meetingId: string) {
+  try {
+    const { id: callerId } = await requireCaller();
+    const result = await MeetingAccessGrantService.clearInactiveGrants(meetingId, callerId);
+    return { success: true, ...result };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error clearing inactive access grants";
+    return { success: false, error: message };
+  }
+}

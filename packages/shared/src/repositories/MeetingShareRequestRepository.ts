@@ -1,6 +1,6 @@
 import { db } from "@meeting-bot/shared/db";
 import { meetingShareRequests } from "@meeting-bot/shared/db/schema";
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, ne } from "drizzle-orm";
 
 export type MeetingShareRequestRecord = typeof meetingShareRequests.$inferSelect;
 export type MeetingShareRequestInsert = typeof meetingShareRequests.$inferInsert;
@@ -74,5 +74,19 @@ export class MeetingShareRequestRepository {
         updatedAt: when,
       })
       .where(eq(meetingShareRequests.id, id));
+  }
+
+  static async deleteById(id: string): Promise<void> {
+    await db.delete(meetingShareRequests).where(eq(meetingShareRequests.id, id));
+  }
+
+  /** Removes every terminal-state (non-pending) request for a meeting; a pending row is never deletable via this path. */
+  static async deleteResolvedByMeetingId(meetingId: string): Promise<number> {
+    const deleted = await db
+      .delete(meetingShareRequests)
+      .where(and(eq(meetingShareRequests.meetingId, meetingId), ne(meetingShareRequests.status, "pending")))
+      .returning({ id: meetingShareRequests.id });
+
+    return deleted.length;
   }
 }

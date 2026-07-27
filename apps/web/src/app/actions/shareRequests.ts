@@ -48,6 +48,28 @@ export async function rejectShareRequestAction(requestId: string) {
   }
 }
 
+export async function deleteShareRequestAction(requestId: string) {
+  try {
+    const { id: callerId } = await requireCaller();
+    await ShareRequestService.deleteShareRequest(requestId, callerId);
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error deleting share request";
+    return { success: false, error: message };
+  }
+}
+
+export async function clearResolvedShareRequestsAction(meetingId: string) {
+  try {
+    const { id: callerId } = await requireCaller();
+    const result = await ShareRequestService.clearResolvedShareRequests(meetingId, callerId);
+    return { success: true, ...result };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error clearing resolved share requests";
+    return { success: false, error: message };
+  }
+}
+
 export async function listShareRequestsByMeetingIdAction(meetingId: string) {
   try {
     const { id: callerId } = await requireCaller();

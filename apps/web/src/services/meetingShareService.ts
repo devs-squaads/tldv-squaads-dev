@@ -270,6 +270,25 @@ export class MeetingShareService {
     await MeetingShareRepository.revokeById(shareId, new Date());
   }
 
+  // Owner-gated, mirrors revokeShare above. Only a revoked/expired share may be deleted — an
+  // active one must be revoked first (deletion is for cleanup, revoke is for containment).
+  static async deleteShare(shareId: string, callerId?: string): Promise<void> {
+    const share = await MeetingShareRepository.findById(shareId);
+    if (!share) {
+      throw new Error("Share not found");
+    }
+    if (callerId !== undefined) {
+      const meeting = await MeetingRepository.findById(share.meetingId);
+      if (!meeting || callerId !== meeting.ownerId) {
+        throw new Error("Only the meeting owner can delete this share");
+      }
+    }
+    if (isShareActive(share.expiresAt, share.revokedAt, new Date())) {
+      throw new Error("Only a revoked or expired share can be deleted");
+    }
+    await MeetingShareRepository.deleteById(shareId);
+  }
+
   static async clearInactiveShares(meetingId: string): Promise<{ deletedCount: number }> {
     if (!meetingId) {
       throw new Error("meetingId is required");

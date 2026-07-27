@@ -25,9 +25,21 @@ const state: {
   createCalls: ShareRequestRow[];
   resolveCalls: { id: string; input: Record<string, unknown> }[];
   cancelCalls: string[];
+  deleteCalls: string[];
+  deleteResolvedCalls: string[];
   grantCalls: Record<string, unknown>[];
   shareCalls: { input: Record<string, unknown>; callerId?: string }[];
-} = { meetings: {}, requests: {}, createCalls: [], resolveCalls: [], cancelCalls: [], grantCalls: [], shareCalls: [] };
+} = {
+  meetings: {},
+  requests: {},
+  createCalls: [],
+  resolveCalls: [],
+  cancelCalls: [],
+  deleteCalls: [],
+  deleteResolvedCalls: [],
+  grantCalls: [],
+  shareCalls: [],
+};
 
 function resetState() {
   state.meetings = {};
@@ -35,6 +47,8 @@ function resetState() {
   state.createCalls = [];
   state.resolveCalls = [];
   state.cancelCalls = [];
+  state.deleteCalls = [];
+  state.deleteResolvedCalls = [];
   state.grantCalls = [];
   state.shareCalls = [];
 }
@@ -91,6 +105,18 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingShareRequestRepository",
       if (row) {
         state.requests[id] = { ...row, status: "cancelled", resolvedAt: new Date() };
       }
+    },
+    deleteById: async (id: string) => {
+      state.deleteCalls.push(id);
+      delete state.requests[id];
+    },
+    deleteResolvedByMeetingId: async (meetingId: string) => {
+      state.deleteResolvedCalls.push(meetingId);
+      const toDelete = Object.values(state.requests).filter(
+        (r) => r.meetingId === meetingId && r.status !== "pending"
+      );
+      toDelete.forEach((r) => delete state.requests[r.id]);
+      return toDelete.length;
     },
   },
 }));
@@ -242,6 +268,55 @@ describe("ShareRequestService", () => {
       seedPendingRequest({ status: "approved" });
       await expect(ShareRequestService.cancelShareRequest("owner-1", "request-1")).rejects.toThrow();
       expect(state.cancelCalls).toHaveLength(0);
+    });
+  });
+
+  describe("deleteShareRequest", () => {
+    it("the requester can delete their own resolved (approved) request", async () => {
+      seedPendingRequest({ status: "approved" });
+      await ShareRequestService.deleteShareRequest("request-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["request-1"]);
+    });
+
+    it("the requester can delete their own resolved (rejected) request", async () => {
+      seedPendingRequest({ status: "rejected" });
+      await ShareRequestService.deleteShareRequest("request-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["request-1"]);
+    });
+
+    it("the requester can delete their own resolved (cancelled) request", async () => {
+      seedPendingRequest({ status: "cancelled" });
+      await ShareRequestService.deleteShareRequest("request-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["request-1"]);
+    });
+
+    it("rejects deleting a pending request (must be resolved first)", async () => {
+      seedPendingRequest();
+      await expect(ShareRequestService.deleteShareRequest("request-1", "owner-1")).rejects.toThrow();
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it("rejects a non-requester", async () => {
+      seedPendingRequest({ status: "approved" });
+      await expect(ShareRequestService.deleteShareRequest("request-1", "someone-else")).rejects.toThrow();
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it("rejects when the request does not exist", async () => {
+      await expect(ShareRequestService.deleteShareRequest("nope", "owner-1")).rejects.toThrow();
+    });
+  });
+
+  describe("clearResolvedShareRequests", () => {
+    it("the owner clears resolved requests and gets the deleted count back", async () => {
+      const result = await ShareRequestService.clearResolvedShareRequests("meeting-1", "owner-1");
+      expect(result).toEqual({ deletedCount: 0 });
+      expect(state.deleteResolvedCalls).toEqual(["meeting-1"]);
+    });
+
+    it("rejects a non-owner caller", async () => {
+      await expect(ShareRequestService.clearResolvedShareRequests("meeting-1", "intruder-1")).rejects.toThrow();
+      expect(state.deleteResolvedCalls).toHaveLength(0);
     });
   });
 

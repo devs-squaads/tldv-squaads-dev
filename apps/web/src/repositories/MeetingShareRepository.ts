@@ -151,6 +151,13 @@ export class MeetingShareRepository {
     await db.insert(meetingShareAccessLogs).values(values);
   }
 
+  static async deleteById(id: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.delete(meetingShareAccessLogs).where(eq(meetingShareAccessLogs.meetingShareId, id));
+      await tx.delete(meetingShares).where(eq(meetingShares.id, id));
+    });
+  }
+
   static async deleteInactiveByMeetingId(meetingId: string, now: Date = new Date()): Promise<number> {
     return db.transaction(async (tx) => {
       const inactiveShares = await tx

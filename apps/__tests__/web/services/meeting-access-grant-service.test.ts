@@ -17,13 +17,17 @@ const state: {
   grants: Record<string, GrantRow>;
   createCalls: GrantRow[];
   revokeCalls: string[];
-} = { meetings: {}, grants: {}, createCalls: [], revokeCalls: [] };
+  deleteCalls: string[];
+  deleteInactiveCalls: string[];
+} = { meetings: {}, grants: {}, createCalls: [], revokeCalls: [], deleteCalls: [], deleteInactiveCalls: [] };
 
 function resetState() {
   state.meetings = {};
   state.grants = {};
   state.createCalls = [];
   state.revokeCalls = [];
+  state.deleteCalls = [];
+  state.deleteInactiveCalls = [];
 }
 
 const bunMock = mock as typeof mock & {
@@ -52,6 +56,18 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingAccessGrantRepository", 
       Object.values(state.grants).filter((g) => g.meetingId === meetingId),
     revokeById: async (id: string) => {
       state.revokeCalls.push(id);
+    },
+    deleteById: async (id: string) => {
+      state.deleteCalls.push(id);
+      delete state.grants[id];
+    },
+    deleteInactiveByMeetingId: async (meetingId: string) => {
+      state.deleteInactiveCalls.push(meetingId);
+      const toDelete = Object.values(state.grants).filter(
+        (g) => g.meetingId === meetingId && (g.revokedAt !== null || (g.expiresAt !== null && g.expiresAt.getTime() <= Date.now()))
+      );
+      toDelete.forEach((g) => delete state.grants[g.id]);
+      return toDelete.length;
     },
   },
 }));
@@ -327,6 +343,89 @@ describe("MeetingAccessGrantService", () => {
       await expect(
         MeetingAccessGrantService.revokeGrant({ callerId: "owner-1", grantId: "nope" })
       ).rejects.toThrow();
+    });
+  });
+
+  describe("deleteGrant", () => {
+    it("owner can delete a revoked grant", async () => {
+      state.grants["grant-1"] = {
+        id: "grant-1",
+        meetingId: "meeting-1",
+        ownerId: "owner-1",
+        granteeUserId: "grantee-1",
+        expiresAt: null,
+        revokedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await MeetingAccessGrantService.deleteGrant("grant-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["grant-1"]);
+    });
+
+    it("owner can delete an expired grant", async () => {
+      state.grants["grant-1"] = {
+        id: "grant-1",
+        meetingId: "meeting-1",
+        ownerId: "owner-1",
+        granteeUserId: "grantee-1",
+        expiresAt: new Date(Date.now() - 60_000),
+        revokedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await MeetingAccessGrantService.deleteGrant("grant-1", "owner-1");
+      expect(state.deleteCalls).toEqual(["grant-1"]);
+    });
+
+    it("rejects deleting an active grant (must revoke first)", async () => {
+      state.grants["grant-1"] = {
+        id: "grant-1",
+        meetingId: "meeting-1",
+        ownerId: "owner-1",
+        granteeUserId: "grantee-1",
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await expect(MeetingAccessGrantService.deleteGrant("grant-1", "owner-1")).rejects.toThrow();
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it("rejects a non-owner caller", async () => {
+      state.grants["grant-1"] = {
+        id: "grant-1",
+        meetingId: "meeting-1",
+        ownerId: "owner-1",
+        granteeUserId: "grantee-1",
+        expiresAt: null,
+        revokedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await expect(MeetingAccessGrantService.deleteGrant("grant-1", "grantee-1")).rejects.toThrow();
+      expect(state.deleteCalls).toHaveLength(0);
+    });
+
+    it("rejects when the grant does not exist", async () => {
+      await expect(MeetingAccessGrantService.deleteGrant("nope", "owner-1")).rejects.toThrow();
+    });
+  });
+
+  describe("clearInactiveGrants", () => {
+    it("owner clears inactive grants and gets the deleted count back", async () => {
+      const result = await MeetingAccessGrantService.clearInactiveGrants("meeting-1", "owner-1");
+      expect(result).toEqual({ deletedCount: 0 });
+      expect(state.deleteInactiveCalls).toEqual(["meeting-1"]);
+    });
+
+    it("rejects a non-owner caller", async () => {
+      await expect(MeetingAccessGrantService.clearInactiveGrants("meeting-1", "grantee-1")).rejects.toThrow();
+      expect(state.deleteInactiveCalls).toHaveLength(0);
     });
   });
 });
