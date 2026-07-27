@@ -160,6 +160,110 @@ describe("MeetingAccessGrantService", () => {
         })
       ).rejects.toThrow();
     });
+
+    // 013/Phase 4.2: accessType maps straight to an expiry, bypassing shareTtl.ts's fixed
+    // TTL-menu validation exercised above — Share Request approvals need any day count, not
+    // just 60/1440/10080. These tests use the REAL (unmocked) resolveExpiresAt/shareTtl.ts,
+    // so they prove the fix at the exact spot the original bug threw at runtime.
+    describe("accessType mapping (013)", () => {
+      it("temporary honors an arbitrary day count (15 days) the configured menu does not contain", async () => {
+        const result = await MeetingAccessGrantService.createGrant({
+          callerId: "owner-1",
+          meetingId: "meeting-1",
+          granteeUserId: "grantee-1",
+          accessType: "temporary",
+          expiresInDays: 15,
+        });
+
+        expect(result.expiresAt).not.toBeNull();
+        const expectedMs = 15 * 1440 * 60 * 1000;
+        const deltaMs = result.expiresAt!.getTime() - Date.now();
+        expect(deltaMs).toBeGreaterThan(expectedMs - 5000);
+        expect(deltaMs).toBeLessThanOrEqual(expectedMs);
+      });
+
+      it("temporary honors a 47-day count too, not just a value that happens to divide evenly", async () => {
+        const result = await MeetingAccessGrantService.createGrant({
+          callerId: "owner-1",
+          meetingId: "meeting-1",
+          granteeUserId: "grantee-1",
+          accessType: "temporary",
+          expiresInDays: 47,
+        });
+
+        expect(result.expiresAt).not.toBeNull();
+        const expectedMs = 47 * 1440 * 60 * 1000;
+        const deltaMs = result.expiresAt!.getTime() - Date.now();
+        expect(deltaMs).toBeGreaterThan(expectedMs - 5000);
+        expect(deltaMs).toBeLessThanOrEqual(expectedMs);
+      });
+
+      it("temporary without expiresInDays is rejected", async () => {
+        await expect(
+          MeetingAccessGrantService.createGrant({
+            callerId: "owner-1",
+            meetingId: "meeting-1",
+            granteeUserId: "grantee-1",
+            accessType: "temporary",
+          })
+        ).rejects.toThrow();
+      });
+
+      it("permanent maps to a null expiresAt", async () => {
+        const result = await MeetingAccessGrantService.createGrant({
+          callerId: "owner-1",
+          meetingId: "meeting-1",
+          granteeUserId: "grantee-1",
+          accessType: "permanent",
+        });
+
+        expect(result.expiresAt).toBeNull();
+      });
+
+      it("single_use is rejected — registered recipients only get temporary/permanent", async () => {
+        await expect(
+          MeetingAccessGrantService.createGrant({
+            callerId: "owner-1",
+            meetingId: "meeting-1",
+            granteeUserId: "grantee-1",
+            accessType: "single_use",
+          })
+        ).rejects.toThrow();
+      });
+    });
+
+    describe("callerRole guard (013)", () => {
+      it("member callerRole cannot create a grant directly", async () => {
+        await expect(
+          MeetingAccessGrantService.createGrant({
+            callerId: "owner-1",
+            meetingId: "meeting-1",
+            granteeUserId: "grantee-1",
+            callerRole: "member",
+          })
+        ).rejects.toThrow();
+        expect(state.createCalls).toHaveLength(0);
+      });
+
+      it("admin callerRole can create a grant directly", async () => {
+        const result = await MeetingAccessGrantService.createGrant({
+          callerId: "owner-1",
+          meetingId: "meeting-1",
+          granteeUserId: "grantee-1",
+          callerRole: "admin",
+        });
+        expect(result.id).toBeTruthy();
+      });
+
+      it("undefined callerRole (M2M) is unaffected", async () => {
+        const result = await MeetingAccessGrantService.createGrant({
+          callerId: "owner-1",
+          meetingId: "meeting-1",
+          granteeUserId: "grantee-1",
+        });
+        expect(result.id).toBeTruthy();
+      });
+    });
   });
 
   describe("listGrantsByMeetingId", () => {

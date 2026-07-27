@@ -8,6 +8,14 @@ export interface CreateShareInput {
   ttlMinutes?: number;
   noExpiry?: boolean;
   createdBy?: string;
+  // 013: unregistered-recipient-only; dies on first successful OTP verifyAccess() (ADR-0008).
+  singleUse?: boolean;
+  // 013/Phase 4.2 follow-up (PR3 fix): mirrors CreateGrantInput's accessType/expiresInDays —
+  // takes priority over ttlMinutes/noExpiry above when present, bypassing shareTtl.ts's fixed
+  // TTL menu for arbitrary day counts. "single_use" is NOT resolved through this pair; use the
+  // singleUse field above instead (see resolveExpiresAtFromAccessType in meetingShareService.ts).
+  accessType?: "single_use" | "temporary" | "permanent";
+  expiresInDays?: number; // required when accessType === "temporary"
 }
 
 export interface ShareListItem {

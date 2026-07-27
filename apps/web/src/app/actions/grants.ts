@@ -1,26 +1,34 @@
 "use server";
 
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/auth";
+import { requireCaller } from "@/lib/sessionCaller";
 import { MeetingAccessGrantService } from "@/services/meetingAccessGrantService";
-
-async function requireCallerId(): Promise<string> {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
-  return session.user.id;
-}
+import { ShareRequestService } from "@/services/shareRequestService";
+import type { ShareRequestAccessType } from "@/services/shareRequestService";
 
 export async function createGrantAction(input: {
   meetingId: string;
   granteeUserId: string;
   ttlMinutes?: number;
   noExpiry?: boolean;
+  accessType?: ShareRequestAccessType;
+  expiresInDays?: number;
 }) {
   try {
-    const callerId = await requireCallerId();
-    const result = await MeetingAccessGrantService.createGrant({ callerId, ...input });
+    const { id: callerId, role } = await requireCaller();
+    // 013: member Owner → pending Share Request (no downstream row, no email); admin Owner →
+    // direct create, unchanged from 009 (revoke stays direct for both roles, below).
+    if (role === "member") {
+      const request = await ShareRequestService.createShareRequest({
+        callerId,
+        meetingId: input.meetingId,
+        recipient: { granteeUserId: input.granteeUserId },
+        accessType: input.accessType ?? "permanent",
+        expiresInDays: input.expiresInDays,
+      });
+      return { success: true, shareRequest: request };
+    }
+
+    const result = await MeetingAccessGrantService.createGrant({ callerId, callerRole: role, ...input });
     return { success: true, grant: result };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error creating access grant";
@@ -30,7 +38,7 @@ export async function createGrantAction(input: {
 
 export async function revokeGrantAction(grantId: string) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     await MeetingAccessGrantService.revokeGrant({ callerId, grantId });
     return { success: true };
   } catch (error: unknown) {
@@ -41,7 +49,7 @@ export async function revokeGrantAction(grantId: string) {
 
 export async function listGrantsAction(meetingId: string) {
   try {
-    const callerId = await requireCallerId();
+    const { id: callerId } = await requireCaller();
     const grants = await MeetingAccessGrantService.listGrantsByMeetingId(callerId, meetingId);
     return { success: true, grants };
   } catch (error: unknown) {

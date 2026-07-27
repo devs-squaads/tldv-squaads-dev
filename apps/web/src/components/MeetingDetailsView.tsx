@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { useSession } from "next-auth/react";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -16,7 +17,19 @@ import {
 import Link from "next/link";
 import { deleteMeetingAction, reprocessMeetingAction, refineSummaryAction, retryMeetingAction } from "@/app/actions/bot";
 import { clearInactiveSharesAction, createShareAction, renewShareAccessAction, resendShareInviteAction, revokeShareAction } from "@/app/actions/shares";
-import { createGrantAction } from "@/app/actions/grants";
+import { createGrantAction, revokeGrantAction } from "@/app/actions/grants";
+import { cancelShareRequestAction } from "@/app/actions/shareRequests";
+import { resolveRecipientAction } from "@/app/actions/recipients";
+import type { ShareRequestRecord, ShareRequestAccessType } from "@/services/shareRequestService";
+import {
+  DEFAULT_ACCESS_TYPE,
+  DEFAULT_TEMPORARY_DAYS,
+  canCancelShareRequest,
+  getAvailableAccessTypes,
+  resolveRecipients,
+  validateAccessTypeSelection,
+  type RecipientMode,
+} from "./meetingSharing.logic";
 import { useRouter } from "next/navigation";
 import { ChapterVideoPlayer, type Chapter } from "./ChapterVideoPlayer";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
@@ -50,12 +63,35 @@ interface MeetingShare {
   isActive: boolean;
 }
 
-/** Calendar-sourced participant suggestion (spec R6) — resolved server-side by ParticipantSuggestionService. */
+/** Calendar-sourced participant suggestion (spec R6) — resolved server-side by ParticipantSuggestionService.
+ *  Structurally identical to `RecipientCandidate` (meetingSharing.logic) — used interchangeably. */
 interface ParticipantSuggestion {
   email: string;
   /** Set when the email matches a registered user — routes to the Access Grant flow. */
   granteeUserId: string | null;
 }
+
+/** Minimal client-side shape of an `Access Grant` row — 013 "Solicitudes y accesos" passive-discovery section. */
+interface MeetingGrant {
+  id: string;
+  granteeUserId: string;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+}
+
+const accessTypeLabels: Record<ShareRequestAccessType, string> = {
+  single_use: "un solo uso",
+  temporary: "temporal",
+  permanent: "permanente",
+};
+
+const shareRequestStatusLabels: Record<ShareRequestRecord["status"], string> = {
+  pending: "pendiente",
+  approved: "aprobada",
+  rejected: "rechazada",
+  cancelled: "cancelada",
+};
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -77,19 +113,27 @@ export function MeetingDetailsView({
   initialShares,
   ttlOptionsMinutes,
   participantSuggestions,
+  initialGrants,
+  initialShareRequests,
 }: {
   initialMeeting: Meeting;
   initialShares: MeetingShare[];
   ttlOptionsMinutes: number[];
   /** Empty for ad-hoc meetings (no calendar source) — UI degrades to manual email entry. */
   participantSuggestions: ParticipantSuggestion[];
+  /** Empty for a non-owner viewer (own Access Grant) — the section below is Owner-only data. */
+  initialGrants: MeetingGrant[];
+  initialShareRequests: ShareRequestRecord[];
 }) {
   const configuredTtlOptions = ttlOptionsMinutes.length > 0 ? ttlOptionsMinutes : [60];
   const defaultTtlMinutes = configuredTtlOptions[0];
   const defaultRenewOptionValue = String(defaultTtlMinutes);
 
+  const { data: session } = useSession();
   const [meeting, setMeeting] = useState<Meeting>(initialMeeting);
   const [shares, setShares] = useState<MeetingShare[]>(initialShares);
+  const [grants, setGrants] = useState<MeetingGrant[]>(initialGrants);
+  const [shareRequests, setShareRequests] = useState<ShareRequestRecord[]>(initialShareRequests);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
@@ -100,14 +144,22 @@ export function MeetingDetailsView({
   const [showVideo, setShowVideo] = useState(false);
   const [showSharing, setShowSharing] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState("");
+  const [recipientMode, setRecipientMode] = useState<RecipientMode>(
+    participantSuggestions.length > 0 ? "subset" : "email"
+  );
+  const [selectedParticipantEmails, setSelectedParticipantEmails] = useState<string[]>([]);
+  const [manualRecipientGranteeUserId, setManualRecipientGranteeUserId] = useState<string | null>(null);
+  const [accessType, setAccessType] = useState<ShareRequestAccessType>(DEFAULT_ACCESS_TYPE);
+  const [expiresInDays, setExpiresInDays] = useState(DEFAULT_TEMPORARY_DAYS);
+  const [shareFormError, setShareFormError] = useState<string | null>(null);
   const [participantActionState, setParticipantActionState] = useState<
-    Record<string, "loading" | "done" | "error">
+    Record<string, "loading" | "done" | "pending" | "error">
   >({});
-  const [shareNoExpiry, setShareNoExpiry] = useState(true);
-  const [shareTtlMinutes, setShareTtlMinutes] = useState(defaultTtlMinutes);
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isClearingInactive, setIsClearingInactive] = useState(false);
   const [activeShareActionId, setActiveShareActionId] = useState<string | null>(null);
+  const [activeGrantActionId, setActiveGrantActionId] = useState<string | null>(null);
+  const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);
   const [latestShareUrl, setLatestShareUrl] = useState<string | null>(null);
   const [renewOptionsByShareId, setRenewOptionsByShareId] = useState<Record<string, string>>({});
   const [activeChapterIdx, setActiveChapterIdx] = useState(0);
@@ -175,106 +227,162 @@ export function MeetingDetailsView({
     }
   };
 
-  const handleCreateShare = async () => {
-    if (!shareNoExpiry && !configuredTtlOptions.includes(shareTtlMinutes)) {
-      alert("Selecciona un TTL válido para crear el enlace.");
+  // 013 Phase 6.6: unified recipient-selection submit — replaces the old per-participant-only
+  // flow with the 3 recipient-selection modes (spec: "Recipient-selection modes"). Routes each
+  // resolved recipient through the existing per-recipient action (createGrantAction for a
+  // registered recipient, createShareAction otherwise) — both already role-branch internally
+  // (member Owner → pending Share Request via ShareRequestService, admin Owner → direct), so no
+  // role logic lives here. "all" mode fans out into one call per Participant, never a bundled
+  // record (spec: "Share with all participants expands per recipient").
+  const currentRecipients = resolveRecipients({
+    mode: recipientMode,
+    participants: participantSuggestions,
+    selectedEmails: selectedParticipantEmails,
+    manualRecipient:
+      recipientMode === "email" && recipientEmail.trim()
+        ? { email: recipientEmail.trim(), granteeUserId: manualRecipientGranteeUserId }
+        : null,
+  });
+  const availableAccessTypes = getAvailableAccessTypes(currentRecipients);
+  const effectiveAccessType = availableAccessTypes.includes(accessType) ? accessType : availableAccessTypes[0];
+
+  const handleResolveManualRecipient = async () => {
+    const email = recipientEmail.trim();
+    if (!email) return;
+    const result = await resolveRecipientAction(email);
+    setManualRecipientGranteeUserId(result.success ? result.granteeUserId : null);
+  };
+
+  const handleSubmitShare = async () => {
+    setShareFormError(null);
+    const validationError = validateAccessTypeSelection({
+      accessType: effectiveAccessType,
+      recipients: currentRecipients,
+      expiresInDays: effectiveAccessType === "temporary" ? expiresInDays : null,
+    });
+    if (validationError) {
+      setShareFormError(validationError);
       return;
     }
 
     setIsCreatingShare(true);
     try {
-      const result = await createShareAction({
-        meetingId: meeting.id,
-        shareType: "restricted_email",
-        recipientEmail,
-        noExpiry: shareNoExpiry,
-        ttlMinutes: shareNoExpiry ? undefined : shareTtlMinutes,
-      });
-
-      if (!result.success || !result.share) {
-        alert(`Error al crear enlace: ${result.error}`);
-        return;
+      for (const recipient of currentRecipients) {
+        setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "loading" }));
+        try {
+          if (recipient.granteeUserId) {
+            const result = await createGrantAction({
+              meetingId: meeting.id,
+              granteeUserId: recipient.granteeUserId,
+              accessType: effectiveAccessType,
+              expiresInDays: effectiveAccessType === "temporary" ? expiresInDays : undefined,
+            });
+            if (!result.success) {
+              alert(`Error al procesar a ${recipient.email}: ${result.error}`);
+              setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "error" }));
+              continue;
+            }
+            if ("shareRequest" in result && result.shareRequest) {
+              setShareRequests((prev) => [result.shareRequest, ...prev]);
+              setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "pending" }));
+            } else if ("grant" in result && result.grant) {
+              const now = new Date();
+              setGrants((prev) => [
+                {
+                  id: result.grant.id,
+                  granteeUserId: recipient.granteeUserId as string,
+                  expiresAt: result.grant.expiresAt,
+                  revokedAt: null,
+                  createdAt: now,
+                },
+                ...prev,
+              ]);
+              setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "done" }));
+            }
+          } else {
+            const result = await createShareAction({
+              meetingId: meeting.id,
+              shareType: "restricted_email",
+              recipientEmail: recipient.email,
+              noExpiry: true,
+              singleUse: effectiveAccessType === "single_use",
+              accessType: effectiveAccessType,
+              expiresInDays: effectiveAccessType === "temporary" ? expiresInDays : undefined,
+            });
+            if (!result.success) {
+              alert(`Error al procesar a ${recipient.email}: ${result.error}`);
+              setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "error" }));
+              continue;
+            }
+            if ("shareRequest" in result && result.shareRequest) {
+              setShareRequests((prev) => [result.shareRequest, ...prev]);
+              setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "pending" }));
+            } else if ("share" in result && result.share) {
+              const now = new Date();
+              const newShare: MeetingShare = {
+                id: result.share.id,
+                meetingId: meeting.id,
+                shareType: result.share.shareType,
+                status: "active",
+                recipientEmail: result.share.recipientEmail,
+                shareUrl: result.share.shareUrl,
+                expiresAt: result.share.expiresAt ? new Date(result.share.expiresAt) : null,
+                revokedAt: null,
+                createdAt: now,
+                updatedAt: now,
+                isActive: true,
+              };
+              setShares((prev) => [newShare, ...prev]);
+              setLatestShareUrl(result.share.shareUrl);
+              setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "done" }));
+            }
+          }
+        } catch (err) {
+          console.error(err);
+          setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "error" }));
+        }
       }
 
-      const now = new Date();
-      const newShare: MeetingShare = {
-        id: result.share.id,
-        meetingId: meeting.id,
-        shareType: result.share.shareType,
-        status: "active",
-        recipientEmail: result.share.recipientEmail,
-        shareUrl: result.share.shareUrl,
-        expiresAt: result.share.expiresAt ? new Date(result.share.expiresAt) : null,
-        revokedAt: null,
-        createdAt: now,
-        updatedAt: now,
-        isActive: true,
-      };
-
-      setShares((prev) => [newShare, ...prev]);
-      setLatestShareUrl(result.share.shareUrl);
+      if (recipientMode === "email") {
+        setRecipientEmail("");
+        setManualRecipientGranteeUserId(null);
+      } else if (recipientMode === "subset") {
+        setSelectedParticipantEmails([]);
+      }
     } finally {
       setIsCreatingShare(false);
     }
   };
 
-  // Per-participant suggestion actions (spec R6): individual confirm-to-grant/share,
-  // never a bulk "share with all" action — the Owner reviews each one on its own.
-  const handleGrantParticipant = async (suggestion: ParticipantSuggestion) => {
-    if (!suggestion.granteeUserId) return;
-    setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "loading" }));
+  const handleCancelShareRequest = async (requestId: string) => {
+    setCancellingRequestId(requestId);
     try {
-      const result = await createGrantAction({
-        meetingId: meeting.id,
-        granteeUserId: suggestion.granteeUserId,
-        noExpiry: true,
-      });
+      const result = await cancelShareRequestAction(requestId);
       if (!result.success) {
-        alert(`Error al dar acceso a ${suggestion.email}: ${result.error}`);
-        setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+        alert(`Error al cancelar la solicitud: ${result.error}`);
         return;
       }
-      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "done" }));
-    } catch (err) {
-      console.error(err);
-      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+      const now = new Date();
+      setShareRequests((prev) =>
+        prev.map((r) => (r.id === requestId ? { ...r, status: "cancelled", resolvedAt: now, updatedAt: now } : r))
+      );
+    } finally {
+      setCancellingRequestId(null);
     }
   };
 
-  const handleShareWithParticipant = async (suggestion: ParticipantSuggestion) => {
-    setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "loading" }));
+  const handleRevokeGrant = async (grant: MeetingGrant) => {
+    setActiveGrantActionId(grant.id);
     try {
-      const result = await createShareAction({
-        meetingId: meeting.id,
-        shareType: "restricted_email",
-        recipientEmail: suggestion.email,
-        noExpiry: true,
-      });
-      if (!result.success || !result.share) {
-        alert(`Error al compartir con ${suggestion.email}: ${result.error}`);
-        setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+      const result = await revokeGrantAction(grant.id);
+      if (!result.success) {
+        alert(`Error al revocar acceso: ${result.error}`);
         return;
       }
-
       const now = new Date();
-      const newShare: MeetingShare = {
-        id: result.share.id,
-        meetingId: meeting.id,
-        shareType: result.share.shareType,
-        status: "active",
-        recipientEmail: result.share.recipientEmail,
-        shareUrl: result.share.shareUrl,
-        expiresAt: result.share.expiresAt ? new Date(result.share.expiresAt) : null,
-        revokedAt: null,
-        createdAt: now,
-        updatedAt: now,
-        isActive: true,
-      };
-      setShares((prev) => [newShare, ...prev]);
-      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "done" }));
-    } catch (err) {
-      console.error(err);
-      setParticipantActionState((prev) => ({ ...prev, [suggestion.email]: "error" }));
+      setGrants((prev) => prev.map((g) => (g.id === grant.id ? { ...g, revokedAt: now } : g)));
+    } finally {
+      setActiveGrantActionId(null);
     }
   };
 
@@ -566,6 +674,81 @@ export function MeetingDetailsView({
       </div>
     </div>
   );
+
+  const shareRequestStatusVariant = (status: ShareRequestRecord["status"]) => {
+    if (status === "approved") return "success" as const;
+    if (status === "pending") return "warning" as const;
+    if (status === "rejected") return "destructive" as const;
+    return "outline" as const; // cancelled
+  };
+
+  // 013 "Solicitudes y accesos": all-statuses Share Request row — the registered-recipient
+  // passive-discovery surface (spec: "Silent rejection with passive discovery"). The requester
+  // may cancel their own still-pending request; nobody else gets that action.
+  const renderShareRequestRow = (request: ShareRequestRecord) => (
+    <div key={request.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm">
+          {request.granteeUserId ? `Usuario ${request.granteeUserId}` : request.recipientEmail}
+        </span>
+        <div className="flex items-center gap-2">
+          <Badge variant={shareRequestStatusVariant(request.status)}>{shareRequestStatusLabels[request.status]}</Badge>
+          {canCancelShareRequest(request, session?.user?.id) && (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-6 text-[10px] px-2"
+              onClick={() => handleCancelShareRequest(request.id)}
+              disabled={cancellingRequestId === request.id}
+            >
+              {cancellingRequestId === request.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Cancelar"}
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="text-xs text-[var(--muted-foreground)]">
+        {accessTypeLabels[request.accessType]}
+        {request.accessType === "temporary" && request.expiresInDays ? ` · ${request.expiresInDays} días` : ""}
+        {` · Creada: ${formatDate(request.createdAt)}`}
+      </p>
+    </div>
+  );
+
+  // 013 "Solicitudes y accesos": minimal Access Grant row (explore.md's gap — grants had no
+  // render surface) — mirrors renderShareRow's status/revoke shape for the registered-recipient
+  // path (design: "member Owner revokes directly").
+  const renderGrantRow = (grant: MeetingGrant) => {
+    const isRevoked = Boolean(grant.revokedAt);
+    const isExpired = !isRevoked && grant.expiresAt !== null && grant.expiresAt.getTime() <= Date.now();
+    const statusLabel = isRevoked ? "revocado" : isExpired ? "caducado" : "activo";
+    return (
+      <div key={grant.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm">Usuario {grant.granteeUserId}</span>
+          <div className="flex items-center gap-2">
+            <Badge variant={statusLabel === "activo" ? "success" : statusLabel === "caducado" ? "warning" : "destructive"}>
+              {statusLabel}
+            </Badge>
+            {!isRevoked && (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-6 text-[10px] px-2"
+                onClick={() => handleRevokeGrant(grant)}
+                disabled={activeGrantActionId === grant.id}
+              >
+                {activeGrantActionId === grant.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Revocar"}
+              </Button>
+            )}
+          </div>
+        </div>
+        <p className="text-xs text-[var(--muted-foreground)]">
+          {grant.expiresAt ? `Caduca: ${formatDate(grant.expiresAt)}` : "Sin caducidad"}
+          {` · Creado: ${formatDate(grant.createdAt)}`}
+        </p>
+      </div>
+    );
+  };
 
   // Build chapters for the video player from key moments
   const videoChapters: Chapter[] = (() => {
@@ -1000,98 +1183,150 @@ export function MeetingDetailsView({
         {showSharing && (
           <CardContent className="space-y-6">
             <p className="text-sm text-[var(--muted-foreground)]">
-              Otorga acceso restringido por <strong>email</strong> a esta reunión
+              Otorga acceso a esta reunión. Si tu cuenta es <strong>member</strong>, cada solicitud queda
+              pendiente de aprobación de un admin.
             </p>
 
-            {participantSuggestions.length > 0 ? (
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-[var(--muted-foreground)]">
-                  Participantes detectados en el calendario
-                </label>
-                <div className="space-y-2">
-                  {participantSuggestions.map((suggestion) => {
-                    const actionState = participantActionState[suggestion.email];
-                    const isLoading = actionState === "loading";
-                    const isDone = actionState === "done";
-                    return (
-                      <div
-                        key={suggestion.email}
-                        className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"
-                      >
-                        <div className="flex flex-col">
-                          <span className="text-sm">{suggestion.email}</span>
-                          <span className="text-xs text-[var(--muted-foreground)]">
-                            {suggestion.granteeUserId ? "Usuario registrado" : "Sin cuenta — acceso restringido por email"}
-                          </span>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs gap-1"
-                          disabled={isLoading || isDone}
-                          onClick={() =>
-                            suggestion.granteeUserId
-                              ? handleGrantParticipant(suggestion)
-                              : handleShareWithParticipant(suggestion)
-                          }
-                        >
-                          {isLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Share2 className="h-3 w-3" />}
-                          {isDone ? "Acceso otorgado" : suggestion.granteeUserId ? "Dar acceso" : "Compartir por email"}
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-[var(--muted-foreground)]">
-                Sin participantes detectados desde el calendario. Compartí manualmente con un email abajo.
-              </p>
-            )}
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-[var(--muted-foreground)]">Email destinatario</label>
-                <input
-                  type="email"
-                  value={recipientEmail}
-                  onChange={(e) => setRecipientEmail(e.target.value)}
-                  placeholder="usuario@dominio.com"
-                  className="w-full h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
-                />
+            {/* Recipient-selection modes (spec: "Recipient-selection modes") — (a) all Participants,
+                (b) a chosen subset, (c) an email not present in the meeting. */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-[var(--muted-foreground)]">Destinatarios</label>
+              <div className="flex flex-wrap gap-2">
+                {participantSuggestions.length > 0 && (
+                  <>
+                    <Button
+                      type="button"
+                      variant={recipientMode === "all" ? "primary" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setRecipientMode("all")}
+                    >
+                      Todos los participantes ({participantSuggestions.length})
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={recipientMode === "subset" ? "primary" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setRecipientMode("subset")}
+                    >
+                      Elegir participantes
+                    </Button>
+                  </>
+                )}
+                <Button
+                  type="button"
+                  variant={recipientMode === "email" ? "primary" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setRecipientMode("email")}
+                >
+                  Otro email
+                </Button>
               </div>
             </div>
 
+            {recipientMode === "all" && (
+              participantSuggestions.length > 0 ? (
+                <p className="text-sm text-[var(--muted-foreground)]">
+                  Se compartirá individualmente con los {participantSuggestions.length} participantes
+                  detectados: {participantSuggestions.map((p) => p.email).join(", ")}
+                </p>
+              ) : (
+                <p className="text-sm text-[var(--muted-foreground)]">
+                  Sin participantes detectados desde el calendario.
+                </p>
+              )
+            )}
+
+            {recipientMode === "subset" && (
+              <div className="space-y-2">
+                {participantSuggestions.map((suggestion) => {
+                  const actionState = participantActionState[suggestion.email];
+                  const checked = selectedParticipantEmails.includes(suggestion.email);
+                  return (
+                    <label
+                      key={suggestion.email}
+                      className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) =>
+                          setSelectedParticipantEmails((prev) =>
+                            e.target.checked
+                              ? [...prev, suggestion.email]
+                              : prev.filter((email) => email !== suggestion.email)
+                          )
+                        }
+                      />
+                      <span className="flex-1">{suggestion.email}</span>
+                      <span className="text-xs text-[var(--muted-foreground)]">
+                        {suggestion.granteeUserId ? "Usuario registrado" : "Sin cuenta"}
+                      </span>
+                      {actionState === "pending" && <Badge variant="warning">solicitud enviada</Badge>}
+                      {actionState === "done" && <Badge variant="success">otorgado</Badge>}
+                      {actionState === "error" && <Badge variant="destructive">error</Badge>}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+
+            {recipientMode === "email" && (
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-[var(--muted-foreground)]">Email destinatario</label>
+                  <input
+                    type="email"
+                    value={recipientEmail}
+                    onChange={(e) => {
+                      setRecipientEmail(e.target.value);
+                      setManualRecipientGranteeUserId(null);
+                    }}
+                    onBlur={handleResolveManualRecipient}
+                    placeholder="usuario@dominio.com"
+                    className="w-full h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Access type + defaults (spec: "Access types and defaults") — single_use only offered
+                when every resolved recipient is unregistered; temporary pre-fills 15 editable days;
+                permanent is the default. */}
             <div className="flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={shareNoExpiry}
-                  onChange={(e) => setShareNoExpiry(e.target.checked)}
-                />
-                Sin caducidad
-              </label>
-              {!shareNoExpiry && (
-                <select
-                  value={shareTtlMinutes}
-                  onChange={(e) => setShareTtlMinutes(Number(e.target.value))}
-                  className="h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
-                >
-                  {configuredTtlOptions.map((ttlMinutes) => (
-                    <option key={ttlMinutes} value={ttlMinutes}>
-                      {formatTtlLabel(ttlMinutes)}
-                    </option>
-                  ))}
-                </select>
+              <select
+                value={effectiveAccessType}
+                onChange={(e) => setAccessType(e.target.value as ShareRequestAccessType)}
+                className="h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
+              >
+                {availableAccessTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {accessTypeLabels[type]}
+                  </option>
+                ))}
+              </select>
+              {effectiveAccessType === "temporary" && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={expiresInDays}
+                    onChange={(e) => setExpiresInDays(Number(e.target.value))}
+                    className="h-9 w-20 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-2 text-sm"
+                  />
+                  <span className="text-xs text-[var(--muted-foreground)]">días</span>
+                </div>
               )}
               <Button
                 size="sm"
                 className="gap-1.5"
-                onClick={handleCreateShare}
-                disabled={isCreatingShare || !recipientEmail.trim()}
+                onClick={handleSubmitShare}
+                disabled={isCreatingShare || currentRecipients.length === 0}
               >
                 {isCreatingShare ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
-                {isCreatingShare ? "Creando..." : "Crear enlace"}
+                {isCreatingShare ? "Enviando..." : "Compartir"}
               </Button>
               <Button
                 variant="outline"
@@ -1104,6 +1339,7 @@ export function MeetingDetailsView({
                 {isClearingInactive ? "Limpiando..." : `Limpiar enlaces inactivos (${inactiveSharesCount})`}
               </Button>
             </div>
+            {shareFormError && <p className="text-xs text-[var(--destructive)]">{shareFormError}</p>}
 
             {latestShareUrl && (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 flex items-center justify-between gap-2">
@@ -1118,6 +1354,36 @@ export function MeetingDetailsView({
                 <p className="text-sm text-[var(--muted-foreground)]">No hay enlaces restringidos por email.</p>
               ) : (
                 restrictedShares.map(renderShareRow)
+              )}
+            </div>
+
+            {/* "Solicitudes y accesos" (spec: "Silent rejection with passive discovery" — the
+                registered-recipient variant; unregistered rejections already surface above via the
+                existing restricted_email share list). All-statuses Share Request list + a minimal
+                Access Grants list, per sdd-design's resolution. */}
+            <div className="rounded-xl border border-purple-500/25 bg-purple-500/5 p-4 space-y-3">
+              <h4 className="text-sm font-semibold">Solicitudes y accesos</h4>
+              {shareRequests.length === 0 && grants.length === 0 ? (
+                <p className="text-sm text-[var(--muted-foreground)]">
+                  No hay solicitudes ni accesos otorgados a usuarios registrados.
+                </p>
+              ) : (
+                <>
+                  {shareRequests.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-[var(--muted-foreground)]">Solicitudes de compartición</p>
+                      {shareRequests.map(renderShareRequestRow)}
+                    </div>
+                  )}
+                  {grants.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-[var(--muted-foreground)]">
+                        Accesos otorgados a usuarios registrados
+                      </p>
+                      {grants.map(renderGrantRow)}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </CardContent>

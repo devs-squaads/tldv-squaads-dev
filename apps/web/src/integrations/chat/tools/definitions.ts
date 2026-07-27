@@ -506,7 +506,11 @@ export const manageMeetingShareTool: ToolDefinition<ManageMeetingShareArgs, Mana
       };
     }
 
-    // CREATE
+    // CREATE — the caller's session role is passed through so a `member` Owner hits the same
+    // service-level guard app/actions/shares.ts already relies on (013 Phase 7): the tool never
+    // silently creates a Share Request on the member's behalf, it just surfaces that service
+    // rejection ("Member owners must submit a share request for admin approval") as a structured
+    // failure, same as any other MeetingShareService rejection below.
     if (args.action === "create") {
       try {
         const result = await MeetingShareService.createShare(
@@ -518,6 +522,7 @@ export const manageMeetingShareTool: ToolDefinition<ManageMeetingShareArgs, Mana
             noExpiry: args.no_expiry,
           },
           session.user.id,
+          session.user.role,
         );
 
         return {

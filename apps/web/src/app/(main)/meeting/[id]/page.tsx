@@ -1,18 +1,17 @@
 import { notFound, redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { MeetingDetailsView } from "@/components/MeetingDetailsView";
-import { SquaadsLogo } from "@/components/SquaadsLogo";
-import { SquaadsTitle } from "@/components/SquaadsTitle";
-import Link from "next/link";
+import { AppHeader } from "@/components/AppHeader";
 import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
 import { authOptions } from "@/auth";
 import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { MeetingShareService } from "@/services/meetingShareService";
+import { MeetingAccessGrantService } from "@/services/meetingAccessGrantService";
+import { ShareRequestService } from "@/services/shareRequestService";
 import { ParticipantSuggestionService } from "@/services/participantSuggestionService";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlassCursor } from "@/components/GlassLayout";
 import VenomBeam from "@/components/ui/venom-beam";
-import { UserMenu } from "@/components/UserMenu";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +35,19 @@ export default async function MeetingPage({
   const participantSuggestions = await ParticipantSuggestionService.resolveSuggestions(
     meeting.participantEmails,
   );
+
+  // 013 Phase 6.6: the "Solicitudes y accesos" passive-discovery section only makes sense for
+  // the Owner (both services throw "Only the meeting owner can..." for anyone else) — a
+  // non-owner viewer here is only visiting via their own live Access Grant (see
+  // WebMeetingRepository.findByIdForUser's visibleToUser rule), so they get empty lists instead
+  // of a page-crashing ownership error.
+  const isOwner = meeting.ownerId === session.user.id;
+  const [initialGrants, initialShareRequests] = isOwner
+    ? await Promise.all([
+        MeetingAccessGrantService.listGrantsByMeetingId(session.user.id, id),
+        ShareRequestService.listByMeetingId(session.user.id, id),
+      ])
+    : [[], []];
   // Try to generate fresh signed URLs for the recording — inline for the <video> player,
   // attachment for the download link (a single attachment-disposition URL can't do both;
   // browsers refuse to play a <video> whose response forces a download).
@@ -62,19 +74,9 @@ export default async function MeetingPage({
     <div className="relative flex min-h-screen flex-col bg-[var(--background)]">
       <GlassCursor />
 
-      <header className="sticky top-0 z-20" style={{ background: "var(--card)", backdropFilter: "blur(24px) saturate(1.8)", WebkitBackdropFilter: "blur(24px) saturate(1.8)", borderBottom: "1px solid var(--glass-border)" }}>
-        <div className="absolute inset-0 pointer-events-none" style={{ background: "linear-gradient(to right, rgba(0,242,255,0.02), transparent, rgba(0,242,255,0.02))" }} />
-        <div className="relative container mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-            <SquaadsLogo />
-            <SquaadsTitle />
-          </Link>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <UserMenu />
-          </div>
-        </div>
-      </header>
+      <AppHeader>
+        <ThemeToggle />
+      </AppHeader>
 
       <VenomBeam className="flex-1">
         <main className="container mx-auto px-4 py-8 sm:px-6">
@@ -83,6 +85,8 @@ export default async function MeetingPage({
             initialShares={initialShares}
             ttlOptionsMinutes={ttlOptionsMinutes}
             participantSuggestions={participantSuggestions}
+            initialGrants={initialGrants}
+            initialShareRequests={initialShareRequests}
           />
         </main>
       </VenomBeam>

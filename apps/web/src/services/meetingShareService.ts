@@ -55,6 +55,29 @@ function getShareUrlFromParts(shareId: string, tokenHash: string): string {
   return `${getAppBaseUrl()}/share/${aliasToken}`;
 }
 
+// 013/Phase 4.2 follow-up (PR3 fix): mirrors meetingAccessGrantService's
+// resolveExpiresAtFromAccessType — direct Date math, does NOT call resolveExpiresAt(), so
+// shareTtl.ts's fixed TTL-menu validation never runs for this path. Kept local (not extracted
+// to a shared helper) to avoid touching meetingAccessGrantService.ts's already-committed code
+// in this PR more than necessary; the two are structurally identical but independently owned.
+// "single_use" throws here by design — it is resolved via the singleUse boolean field instead
+// (see createShare below), never through accessType/expiresInDays.
+function resolveExpiresAtFromAccessType(
+  accessType: "single_use" | "temporary" | "permanent",
+  expiresInDays?: number
+): Date | null {
+  if (accessType === "single_use") {
+    throw new Error("single_use access is resolved via the singleUse field, not accessType/expiresInDays");
+  }
+  if (accessType === "permanent") {
+    return null;
+  }
+  if (!expiresInDays || expiresInDays <= 0) {
+    throw new Error("expiresInDays is required for temporary access");
+  }
+  return new Date(Date.now() + expiresInDays * 1440 * 60 * 1000);
+}
+
 function isShareActive(expiresAt: Date | null, revokedAt: Date | null, now: Date): boolean {
   return getShareStatus(expiresAt, revokedAt, now) === "active";
 }
@@ -126,7 +149,17 @@ export class MeetingShareService {
   // callerId is optional so the API_ROUTE_SECRET-gated M2M route
   // (/api/v1/shares, documented as session-independent) keeps working untouched;
   // every session-based caller (app/actions/shares.ts) always supplies it.
-  static async createShare(input: CreateShareInput, callerId?: string): Promise<ShareCreationResult> {
+  // callerRole is optional and additive (013): a member Owner is routed to a Share Request
+  // by the action layer, this guard defends non-action callers (e.g. the chat tool) from
+  // bypassing approval; undefined role (M2M) is unaffected.
+  static async createShare(
+    input: CreateShareInput,
+    callerId?: string,
+    callerRole?: "admin" | "member"
+  ): Promise<ShareCreationResult> {
+    if (callerRole === "member") {
+      throw new Error("Member owners must submit a share request for admin approval");
+    }
     const meeting = await MeetingRepository.findById(input.meetingId);
     if (!meeting) {
       throw new Error("Meeting not found");
@@ -143,7 +176,15 @@ export class MeetingShareService {
 
     const shareType = input.shareType;
     const now = new Date();
-    const expiresAt = resolveExpiresAt(input.ttlMinutes, input.noExpiry);
+    // accessType "temporary"/"permanent" bypasses the fixed ttlMinutes menu below (see
+    // resolveExpiresAtFromAccessType); "single_use" and undefined fall through to the legacy
+    // ttlMinutes/noExpiry path so the singleUse field stays the sole source of truth for
+    // single-use shares (a real approval passes accessType: "single_use" alongside
+    // noExpiry: true, and must not conflate the two mechanisms).
+    const expiresAt =
+      input.accessType && input.accessType !== "single_use"
+        ? resolveExpiresAtFromAccessType(input.accessType, input.expiresInDays)
+        : resolveExpiresAt(input.ttlMinutes, input.noExpiry);
 
     let recipientEmail: string | null = null;
     let recipientEmailNormalized: string | null = null;
@@ -173,6 +214,7 @@ export class MeetingShareService {
       otpHash: null,
       otpExpiresAt: null,
       lastAccessedAt: null,
+      singleUse: input.singleUse ?? false,
       createdAt: now,
       updatedAt: now,
     });
@@ -405,6 +447,13 @@ export class MeetingShareService {
 
     await MeetingShareRepository.markAccessed(share.id, new Date());
     await this.logAccess(share.id, "granted", metadata);
+
+    // 013: singleUse dies on first successful verify — reuses revokedAt, same column the
+    // manual revoke flow already sets, so a second attempt hits the revokedAt guard above.
+    if (share.singleUse) {
+      await MeetingShareRepository.revokeById(share.id, new Date());
+    }
+
     return { status: "ok", meeting: payload };
   }
 }
