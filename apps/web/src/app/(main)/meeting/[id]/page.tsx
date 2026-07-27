@@ -6,6 +6,8 @@ import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
 import { authOptions } from "@/auth";
 import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { MeetingShareService } from "@/services/meetingShareService";
+import { MeetingAccessGrantService } from "@/services/meetingAccessGrantService";
+import { ShareRequestService } from "@/services/shareRequestService";
 import { ParticipantSuggestionService } from "@/services/participantSuggestionService";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlassCursor } from "@/components/GlassLayout";
@@ -33,6 +35,19 @@ export default async function MeetingPage({
   const participantSuggestions = await ParticipantSuggestionService.resolveSuggestions(
     meeting.participantEmails,
   );
+
+  // 013 Phase 6.6: the "Solicitudes y accesos" passive-discovery section only makes sense for
+  // the Owner (both services throw "Only the meeting owner can..." for anyone else) — a
+  // non-owner viewer here is only visiting via their own live Access Grant (see
+  // WebMeetingRepository.findByIdForUser's visibleToUser rule), so they get empty lists instead
+  // of a page-crashing ownership error.
+  const isOwner = meeting.ownerId === session.user.id;
+  const [initialGrants, initialShareRequests] = isOwner
+    ? await Promise.all([
+        MeetingAccessGrantService.listGrantsByMeetingId(session.user.id, id),
+        ShareRequestService.listByMeetingId(session.user.id, id),
+      ])
+    : [[], []];
   // Try to generate fresh signed URLs for the recording — inline for the <video> player,
   // attachment for the download link (a single attachment-disposition URL can't do both;
   // browsers refuse to play a <video> whose response forces a download).
@@ -70,6 +85,8 @@ export default async function MeetingPage({
             initialShares={initialShares}
             ttlOptionsMinutes={ttlOptionsMinutes}
             participantSuggestions={participantSuggestions}
+            initialGrants={initialGrants}
+            initialShareRequests={initialShareRequests}
           />
         </main>
       </VenomBeam>

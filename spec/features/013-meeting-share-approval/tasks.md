@@ -57,15 +57,15 @@ Chain strategy: feature-branch-chain
 - [x] 6.3 Swap headers in `app/(main)/page.tsx`, `settings/page.tsx`, `meeting/[id]/page.tsx` for `AppHeader`; meeting page also fetches grants + share requests into props. (Header swap done this PR; the grants+share-requests prop fetch is deferred to PR6, which is the first PR that changes `MeetingDetailsView.tsx` to actually consume those new props — passing them earlier would be dead data with no test surface.)
 - [x] 6.4 `app/(main)/admin/share-requests/page.tsx` (new): `force-dynamic`; no session → `/login`; non-admin → `/`.
 - [x] 6.5 `components/AdminShareRequestsView.tsx` (new): pending list, approve/reject.
-- [ ] 6.6 `components/MeetingDetailsView.tsx`: 3 recipient modes (all/subset/email), access-type + day controls, member pending/cancel state, new "Solicitudes y accesos" section (all-statuses requests + grants list).
+- [x] 6.6 `components/MeetingDetailsView.tsx`: 3 recipient modes (all/subset/email), access-type + day controls, member pending/cancel state, new "Solicitudes y accesos" section (all-statuses requests + grants list).
 
 ## Phase 7: Chat Tool Role-Awareness
-- [ ] 7.1 `integrations/chat/tools/definitions.ts`: `manage_meeting_share` passes caller role; member gets "requires admin approval" error.
+- [x] 7.1 `integrations/chat/tools/definitions.ts`: `manage_meeting_share` passes caller role; member gets "requires admin approval" error.
 
 ## Phase 8: Docs
 - [ ] 8.1 `README.md`: add `SMTP_HOST/PORT/USER/PASS/FROM` + `EMAIL_PROVIDER=smtp` row to env table (only real sync target, no `.env*.example` files exist).
 
 ## Phase 9: Verification
-- [ ] 9.1 `bun test apps/__tests__` green (all new/extended suites from Phases 1-5).
-- [ ] 9.2 `bun run lint && bun run typecheck && bun run build:web`.
-- [ ] 9.3 Manual walkthrough (UI-visual exempt per AGENTS.md, per plan.md Testing Strategy "Exempt" row): bell badge count, admin-only page guard, 3 recipient modes, passive rejection surfaces (both recipient paths), real SMTP send with configured env.
+- [x] 9.1 `bun test apps/__tests__` green on this branch chain (tracker→PR1→PR2→PR3→PR5→PR6). [PR6: 426 pass / 0 fail. Note: Phase 5 (SMTP, PR4) lives on a separate parallel branch `feat/013-04-smtp-provider` off PR1, not yet merged into this PR6 chain — its tests are not part of this run; still needs a rebase/merge decision before the feature is fully code-complete end to end]
+- [x] 9.2 `bun run lint && bun run typecheck && bun run build:web`. [PR6: all three clean/green, on this branch chain]
+- [ ] 9.3 Manual walkthrough (UI-visual exempt per AGENTS.md, per plan.md Testing Strategy "Exempt" row): bell badge count, admin-only page guard, 3 recipient modes, passive rejection surfaces (both recipient paths), real SMTP send with configured env. [Not executed — no browser in this environment; checklist handed to the orchestrator/user in the PR6 apply report]
