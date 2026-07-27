@@ -740,15 +740,17 @@ export function MeetingDetailsView({
                     [share.id]: e.target.value,
                   }))
                 }
-                className="h-7 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-2 text-xs"
+                className="h-7 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--popover)] px-2 text-xs text-[var(--popover-foreground)]"
                 disabled={activeShareActionId === share.id}
               >
                 {configuredTtlOptions.map((ttlMinutes) => (
-                  <option key={ttlMinutes} value={ttlMinutes}>
+                  <option key={ttlMinutes} value={ttlMinutes} className="bg-[var(--popover)] text-[var(--popover-foreground)]">
                     {formatTtlLabel(ttlMinutes)}
                   </option>
                 ))}
-                <option value="none">Sin caducidad</option>
+                <option value="none" className="bg-[var(--popover)] text-[var(--popover-foreground)]">
+                  Sin caducidad
+                </option>
               </select>
               <Button
                 variant="outline"
@@ -1445,10 +1447,10 @@ export function MeetingDetailsView({
               <select
                 value={effectiveAccessType}
                 onChange={(e) => setAccessType(e.target.value as ShareRequestAccessType)}
-                className="h-9 rounded-[var(--radius)] border border-[var(--border)] bg-transparent px-3 text-sm"
+                className="h-9 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--popover)] px-3 text-sm text-[var(--popover-foreground)]"
               >
                 {availableAccessTypes.map((type) => (
-                  <option key={type} value={type}>
+                  <option key={type} value={type} className="bg-[var(--popover)] text-[var(--popover-foreground)]">
                     {accessTypeLabels[type]}
                   </option>
                 ))}
