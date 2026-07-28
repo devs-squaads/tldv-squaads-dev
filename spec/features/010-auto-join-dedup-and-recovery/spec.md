@@ -1,259 +1,273 @@
-# 010 · Auto-Join Dedup, Shared Access & Transcription Recovery
+# 010 · Deduplicación de Auto-Join, Acceso Compartido y Recuperación de Transcripción
 
-**Status:** spec (design decided inline; no sdd-propose/explore ran)
-**Branch:** `fix/auto-join-dedup-shared-access-transcription-recovery` (off `dev`)
+**Status:** spec (diseño decidido inline; no se corrió sdd-propose/explore)
+**Branch:** `fix/auto-join-dedup-shared-access-transcription-recovery` (a partir de `dev`)
 
-## Purpose
+## Propósito
 
-Three independent but related production bugs, each confirmed against real worker/web/shared source via
-log analysis and CodeGraph exploration:
+Tres bugs de producción independientes pero relacionados, cada uno confirmado contra código fuente real de
+worker/web/shared mediante análisis de logs y exploración con CodeGraph:
 
-1. **Duplicate recording bots** — a check-then-insert race lets two concurrent auto-join polls enqueue
-   the same calendar event twice, so the bot joins one live meeting twice.
-2. **Auto-join co-attendees lose access** — after dedup, exactly one registered attendee becomes the
-   arbitrary `Owner`; every other registered attendee silently never sees the recording. A scoped domain
-   exception (ADR-0007) grants them access automatically.
-3. **Transcription failure hides a good video** — the AI post-processing phase runs after the video is
-   already uploaded, but its failure collapses into generic `error`, hiding the downloadable video and
-   offering a destructive full-rejoin retry instead of the correct reprocess-from-storage retry.
+1. **Bots de grabación duplicados** — una condición de carrera check-then-insert permite que dos polls
+   concurrentes de auto-join encolen el mismo evento de calendario dos veces, por lo que el bot se une a
+   una misma reunión en vivo dos veces.
+2. **Los co-asistentes de auto-join pierden acceso** — después de la deduplicación, exactamente un
+   asistente registrado se convierte en el `Owner` arbitrario; todos los demás asistentes registrados
+   silenciosamente nunca ven la grabación. Una excepción de dominio acotada (ADR-0007) les otorga acceso
+   automáticamente.
+3. **Un fallo de transcripción oculta un video bueno** — la fase de post-procesamiento de IA corre después
+   de que el video ya fue subido, pero su fallo colapsa en un `error` genérico, ocultando el video
+   descargable y ofreciendo un reintento destructivo de reunión completa en vez del reintento correcto de
+   reprocesamiento desde almacenamiento.
 
-This is a bug-fix change with ONE deliberate scoped domain exception (Problem 2), not a new feature.
-Domain vocabulary is fixed by `docs/CONTEXT.md` (sections "Meeting Ownership & Sharing" and
-"Meeting Status") and `docs/adr/0007-auto-join-co-attendee-automatic-access-grant.md`. This spec uses
-those exact terms — **Owner**, **Access Grant**, **Participant**, **Auto-Join Co-Attendee Grant**,
-**Meeting Status** — no synonyms.
+Este es un cambio de corrección de bugs con UNA excepción de dominio acotada y deliberada (Problema 2), no
+una feature nueva. El vocabulario de dominio está fijado por `docs/CONTEXT.md` (secciones "Meeting
+Ownership & Sharing" y "Meeting Status") y `docs/adr/0007-auto-join-co-attendee-automatic-access-grant.md`.
+Esta spec usa esos términos exactos — **Owner**, **Access Grant**, **Participant**, **Auto-Join
+Co-Attendee Grant**, **Meeting Status** — sin sinónimos.
 
 ---
 
-## Problem 1 — Atomic dedup of auto-join enqueues
+## Problema 1 — Deduplicación atómica de encolados de auto-join
 
-### Requirement: Database-level uniqueness on calendar event identity
+### Requisito: Unicidad a nivel de base de datos sobre la identidad del evento de calendario
 
-The system MUST enforce uniqueness of `(source_provider, source_event_id)` in the `meetings` table via a
-**partial** unique index restricted to `WHERE source_event_id IS NOT NULL` (partial because
-manually-enqueued meetings carry null `sourceEventId`/`sourceProvider`). Enforcement MUST live in the
-database, not in application check-then-insert logic.
+El sistema DEBE forzar la unicidad de `(source_provider, source_event_id)` en la tabla `meetings` mediante
+un índice único **parcial** restringido a `WHERE source_event_id IS NOT NULL` (parcial porque las
+reuniones encoladas manualmente llevan `sourceEventId`/`sourceProvider` nulos). La aplicación de esta
+regla DEBE vivir en la base de datos, no en lógica de aplicación check-then-insert.
 
-- **Source:** `packages/shared/src/db/schema.ts:49-50` (plain `text` columns, no index today).
-- **Migration:** new file, next number after `drizzle/0006_meeting_ownership_and_sharing.sql` →
+- **Fuente:** `packages/shared/src/db/schema.ts:49-50` (columnas `text` planas, sin índice hoy).
+- **Migración:** archivo nuevo, siguiente número después de `drizzle/0006_meeting_ownership_and_sharing.sql` →
   `drizzle/0007_*.sql`.
 
-#### Scenario: Concurrent enqueues of the same event insert exactly one row
+#### Escenario: Encolados concurrentes del mismo evento insertan exactamente una fila
 
-- GIVEN two concurrent callers invoke `queueMeetingRun` for the same `(sourceProvider, sourceEventId)`
-- WHEN both attempt to insert
-- THEN exactly one `meetings` row exists for that pair
-- AND the losing caller returns the winner's `meetingId`, not a second row
+- DADO que dos llamadores concurrentes invocan `queueMeetingRun` para el mismo `(sourceProvider, sourceEventId)`
+- CUANDO ambos intentan insertar
+- ENTONCES existe exactamente una fila de `meetings` para ese par
+- Y el llamador perdedor devuelve el `meetingId` del ganador, no una segunda fila
 
-#### Scenario: Manually-enqueued meetings are exempt
+#### Escenario: Las reuniones encoladas manualmente están exentas
 
-- GIVEN two manually-enqueued meetings with null `sourceEventId`
-- WHEN both are inserted
-- THEN both rows persist (the partial index does not constrain null `source_event_id`)
+- DADO dos reuniones encoladas manualmente con `sourceEventId` nulo
+- CUANDO ambas se insertan
+- ENTONCES ambas filas persisten (el índice parcial no restringe `source_event_id` nulo)
 
-### Requirement: `queueMeetingRun` upserts instead of check-then-insert
+### Requisito: `queueMeetingRun` hace upsert en vez de check-then-insert
 
-`queueMeetingRun` (`packages/shared/src/services/meetingQueueService.ts:39-53`) MUST replace the racy
-`findBySourceEvent` + `insert` with `INSERT ... ON CONFLICT (source_provider, source_event_id) DO NOTHING`,
-then, when the insert is a no-op, re-fetch and return the existing winner's id. The two triggers that race
-(worker internal timer `apps/worker/src/runner.ts:12,43-56` at `AUTO_JOIN_POLL_INTERVAL_MS` default
-60000ms, and `GET /api/bot/poll` → worker `/internal/auto-join/poll`, plus Railway rolling-deploy overlap)
-MUST no longer produce duplicate rows. The atomic claim
-(`WorkerMeetingRepository.claimNextPending`, `for update skip locked`) is correct and MUST remain unchanged.
+`queueMeetingRun` (`packages/shared/src/services/meetingQueueService.ts:39-53`) DEBE reemplazar el
+`findBySourceEvent` + `insert` propenso a condición de carrera por `INSERT ... ON CONFLICT (source_provider,
+source_event_id) DO NOTHING`, y luego, cuando el insert resulta en no-op, re-consultar y devolver el id del
+ganador ya existente. Los dos disparadores que compiten entre sí (el timer interno del worker
+`apps/worker/src/runner.ts:12,43-56` con `AUTO_JOIN_POLL_INTERVAL_MS` por defecto en 60000ms, y `GET
+/api/bot/poll` → worker `/internal/auto-join/poll`, además del solape de rolling-deploy de Railway) NO
+DEBEN volver a producir filas duplicadas. El claim atómico (`WorkerMeetingRepository.claimNextPending`,
+`for update skip locked`) es correcto y DEBE permanecer sin cambios.
 
-#### Scenario: Second poll of an already-enqueued event dedups to the winner
+#### Escenario: Un segundo poll de un evento ya encolado deduplica hacia el ganador
 
-- GIVEN event E already has a `meetings` row from a prior poll
-- WHEN `queueMeetingRun` runs again for E
-- THEN no new row is inserted and the existing `meetingId` is returned
+- DADO que el evento E ya tiene una fila de `meetings` de un poll anterior
+- CUANDO `queueMeetingRun` corre de nuevo para E
+- ENTONCES no se inserta ninguna fila nueva y se devuelve el `meetingId` existente
 
-**TDD:** live-Postgres test (NOT mocked-module) exercising the unique constraint under concurrency —
-follow the established precedent in `apps/__tests__/shared/repositories/user-repository.test.ts` and
-`meeting-access-grant-repository.test.ts` (`createLiveConnection` from
-`@meeting-bot/shared/db/liveConnection` + `describe.skipIf(!dbAvailable)`), because Bun `mock.module()`
-only honors the first registration per specifier per process and cannot test this dedup reliably in CI.
-New/extended test file: `apps/__tests__/shared/services/meeting-queue-service.test.ts` (live-DB path).
-
----
-
-## Problem 2 — Auto-Join Co-Attendee Grant (ADR-0007 exception)
-
-### Requirement: Automatic Access Grant for registered co-attendees of auto-join meetings
-
-Scoped ONLY to auto-join-originated meetings (both `meetings.sourceProvider` and `sourceEventId` set).
-For every email in the calendar event's `participantEmails`
-(`apps/worker/src/integrations/calendar/types.ts:18`, populated from `event.attendees` in
-`GoogleCalendarProvider.ts:156-158`) that matches a registered `users.email`
-(`UserRepository.findByEmail`) and is NOT the resolved `Owner`, the system MUST create a
-`meeting_access_grants` row via `MeetingAccessGrantRepository.create` with **no expiry** (indefinite,
-manually revocable like any other grant). The `Owner` MUST NOT be derived from `organizerEmail`
-(`docs/CONTEXT.md`: "No se deriva de organizerEmail"). This runs in
-`apps/worker/src/services/autoJoinService.ts` right after `queueMeetingRun` returns — whether it inserted
-or deduped — since a later poll may be the first time a different co-attendee email surfaces.
-
-Manually-enqueued meetings (`INVITE_BOT`, dashboard/chat `enqueue_meeting`) MUST be completely unaffected:
-`Participant` there stays suggestion-only per the 009 model.
-
-#### Scenario: Non-owner registered attendee is auto-granted access
-
-- GIVEN an auto-join meeting where attendees A and B are both registered users and A won the insert race as `Owner`
-- WHEN the auto-join service processes the event
-- THEN a `meeting_access_grants` row is created for B with null `expiresAt`
-- AND B can list and open the meeting despite not being `Owner`
-
-#### Scenario: Grant applies even if the co-attendee never enabled their own auto-join
-
-- GIVEN registered user B appears as an attendee but never connected/enabled Google Calendar auto-join
-- WHEN the auto-join service processes the triggering event
-- THEN B is still granted access (matching a registered email is the only bar)
-
-#### Scenario: Unregistered attendees and the Owner are skipped
-
-- GIVEN an attendee email with no matching `users.email`, and the resolved `Owner`'s own email
-- WHEN the auto-join service processes the event
-- THEN no grant is created for the unregistered email and none for the `Owner`
-
-### Requirement: Idempotent, revocation-respecting grant creation
-
-Grant creation MUST be idempotent across repeated polls of the same event and MUST NOT re-create a grant
-if ANY row already exists for that `(meetingId, granteeUserId)` pair — even if the `Owner` manually
-revoked it. The check MUST be "does any row exist at all", NOT "does a live/non-revoked row exist". This
-requires a new repository method, e.g. `MeetingAccessGrantRepository.existsForMeetingAndGrantee(meetingId,
-granteeUserId): Promise<boolean>`.
-
-#### Scenario: Repeated polls do not duplicate grants
-
-- GIVEN B already has a grant row on the meeting
-- WHEN the ~60s auto-join poller re-scans the same event
-- THEN no additional grant row is created
-
-#### Scenario: Deliberately revoked grant is not resurrected
-
-- GIVEN the `Owner` manually revoked B's grant (`revokedAt` set)
-- WHEN a later poll of the same event runs
-- THEN the revoked grant MUST NOT be re-created
-
-**TDD:** extend `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts` (live-DB) for
-`existsForMeetingAndGrantee`; new `apps/__tests__/worker/services/autoJoinService.test.ts` (or extend the
-existing auto-join test) for the grant-creation branch, matching-email filtering, Owner exclusion, and
-idempotency.
+**TDD:** test contra Postgres en vivo (NO módulo mockeado) que ejercita la restricción única bajo
+concurrencia — siguiendo el precedente ya establecido en
+`apps/__tests__/shared/repositories/user-repository.test.ts` y `meeting-access-grant-repository.test.ts`
+(`createLiveConnection` de `@meeting-bot/shared/db/liveConnection` + `describe.skipIf(!dbAvailable)`),
+porque `mock.module()` de Bun solo honra el primer registro por specifier por proceso y no puede testear
+esta deduplicación de forma confiable en CI. Archivo de test nuevo/extendido:
+`apps/__tests__/shared/services/meeting-queue-service.test.ts` (ruta live-DB).
 
 ---
 
-## Problem 3 — Transcription failure is a recoverable state, video stays visible
+## Problema 2 — Auto-Join Co-Attendee Grant (excepción ADR-0007)
 
-### Requirement: New recoverable `transcription_error` status
+### Requisito: Access Grant automático para co-asistentes registrados de reuniones auto-join
 
-The system MUST add a `transcription_error` value to `meetingStatusEnum`
-(`packages/shared/src/db/schema.ts`) via an additive `ALTER TYPE ... ADD VALUE` migration (`drizzle/0007`
-scope or its own numbered file — additive, unlike 009's enum recreate). In
-`packages/shared/src/domain/meetingStatus.ts` it MUST be added to the `MeetingStatus` union, to
-`ALLOWED_TRANSITIONS` as **recoverable** (may transition to `transcribing`/`summarizing`/`completed`,
-unlike terminal `error`/`rejected`), and to `MEETING_STATUS_LABELS_ES` with label
-`"Error de transcripción"`. It MUST NOT be added to `ACTIVE_PROCESSING_STATUSES` (it is an actionable
-resolved-ish state, same bucket as `error`/`rejected`).
+Acotado ÚNICAMENTE a reuniones originadas por auto-join (con `meetings.sourceProvider` y `sourceEventId`
+seteados). Para cada email en `participantEmails` del evento de calendario
+(`apps/worker/src/integrations/calendar/types.ts:18`, poblado desde `event.attendees` en
+`GoogleCalendarProvider.ts:156-158`) que matchee un `users.email` registrado (`UserRepository.findByEmail`)
+y que NO sea el `Owner` resuelto, el sistema DEBE crear una fila de `meeting_access_grants` vía
+`MeetingAccessGrantRepository.create` **sin vencimiento** (indefinido, revocable manualmente como
+cualquier otro grant). El `Owner` NO DEBE derivarse de `organizerEmail` (`docs/CONTEXT.md`: "No se deriva
+de organizerEmail"). Esto corre en `apps/worker/src/services/autoJoinService.ts` justo después de que
+`queueMeetingRun` retorna — ya sea que haya insertado o deduplicado — dado que un poll posterior puede ser
+la primera vez que surge un email de co-asistente distinto.
 
-#### Scenario: transcription_error is recoverable, not terminal
+Las reuniones encoladas manualmente (`INVITE_BOT`, `enqueue_meeting` de dashboard/chat) DEBEN quedar
+completamente sin afectar: ahí `Participant` sigue siendo solo-sugerencia según el modelo de 009.
 
-- GIVEN a meeting in status `transcription_error`
-- WHEN a transition to `transcribing`/`summarizing`/`completed` is validated
-- THEN the transition is allowed (whereas `error`/`rejected` require restarting from `pending`)
+#### Escenario: Un asistente registrado que no es el owner recibe acceso auto-otorgado
 
-### Requirement: AI post-processing failure sets transcription_error, not error
+- DADO una reunión auto-join donde los asistentes A y B son ambos usuarios registrados y A ganó la carrera
+  de inserción como `Owner`
+- CUANDO el servicio de auto-join procesa el evento
+- ENTONCES se crea una fila de `meeting_access_grants` para B con `expiresAt` nulo
+- Y B puede listar y abrir la reunión a pesar de no ser `Owner`
 
-In `apps/worker/src/services/meetingWorkerService.ts`, the video is uploaded and
-`recordingFilePath`/`recordingStorageKey` persisted (~lines 120-126) BEFORE the AI phase. When the AI
-transcription/summary phase throws, its catch block (~lines 165-173) MUST set
-`status: "transcription_error"` instead of generic `"error"`. The outer catch for real recording/join
-failures (~lines 174-193), where no video was ever produced, MUST keep `"error"` — unchanged.
+#### Escenario: El grant aplica incluso si el co-asistente nunca habilitó su propio auto-join
 
-#### Scenario: AI failure after a good recording yields transcription_error
+- DADO que el usuario registrado B aparece como asistente pero nunca conectó/habilitó el auto-join de
+  Google Calendar
+- CUANDO el servicio de auto-join procesa el evento disparador
+- ENTONCES a B se le otorga acceso de todos modos (que el email matchee uno registrado es el único
+  requisito)
 
-- GIVEN a meeting whose video uploaded successfully and `recordingFilePath` is set
-- WHEN the AI transcription/summary phase throws
-- THEN status becomes `transcription_error` (not `error`)
+#### Escenario: Los asistentes no registrados y el Owner se omiten
 
-#### Scenario: Join/recording failure still yields error
+- DADO un email de asistente sin `users.email` que lo matchee, y el propio email del `Owner` resuelto
+- CUANDO el servicio de auto-join procesa el evento
+- ENTONCES no se crea ningún grant para el email no registrado ni tampoco para el `Owner`
 
-- GIVEN a meeting that failed to join or record (no video produced)
-- WHEN the outer catch handles it
-- THEN status remains `error`
+### Requisito: Creación de grant idempotente y respetuosa de la revocación
 
-### Requirement: Video visibility gated on file presence, not completed status
+La creación de grants DEBE ser idempotente a través de polls repetidos del mismo evento y NO DEBE recrear
+un grant si YA existe cualquier fila para ese par `(meetingId, granteeUserId)` — incluso si el `Owner` lo
+revocó manualmente. La verificación DEBE ser "¿existe alguna fila en absoluto?", NO "¿existe una fila
+viva/no revocada?". Esto requiere un método de repositorio nuevo, por ejemplo
+`MeetingAccessGrantRepository.existsForMeetingAndGrantee(meetingId, granteeUserId): Promise<boolean>`.
 
-In `apps/web/src/components/MeetingDetailsView.tsx`, the video player (~line 703) and MP4 download link
-(~line 656) MUST gate on `meeting.recordingFilePath` being truthy instead of `status === "completed"`, so
-a stored video shows regardless of status.
+#### Escenario: Los polls repetidos no duplican grants
 
-#### Scenario: Video shows on transcription_error
+- DADO que B ya tiene una fila de grant en la reunión
+- CUANDO el poller de auto-join (~60s) vuelve a escanear el mismo evento
+- ENTONCES no se crea ninguna fila de grant adicional
 
-- GIVEN a meeting in `transcription_error` with `recordingFilePath` set
-- WHEN the Owner opens the detail view
-- THEN the video player and MP4 download are available
+#### Escenario: Un grant revocado deliberadamente no se resucita
 
-### Requirement: Reprocess (not full rejoin) offered for transcription_error
+- DADO que el `Owner` revocó manualmente el grant de B (`revokedAt` seteado)
+- CUANDO corre un poll posterior del mismo evento
+- ENTONCES el grant revocado NO DEBE recrearse
 
-`canReprocess` MUST additionally be true when `status === "transcription_error"` (in addition to today's
-`status === "completed" && (!rawTranscription || !summary)`), still requiring `recordingFilePath` present,
-reusing the existing `handleReprocess`/`reprocessMeetingAction` wiring (`MeetingDetailsView.tsx:116-133`)
-and `reprocessMeetingService` (`meetingRecoveryService.ts:19-91`) as-is — no new button, no new action.
-`handleReprocess`'s failure-rollback (~lines 120,125,129) MUST restore the meeting's pre-optimistic status
-(now possibly `transcription_error`) instead of hardcoding `"completed"`. The destructive full-rejoin
-retry (`status === "error" || "rejected"` → `retryMeetingAction` → `retryRejectedMeeting`,
-`meetingRecoveryService.ts:94-110`, line ~641) MUST NOT match `transcription_error`.
-
-#### Scenario: Reprocess retries from storage without rejoining
-
-- GIVEN a meeting in `transcription_error` with `recordingFilePath` set
-- WHEN the Owner triggers reprocess
-- THEN `reprocessMeetingTranscription` retries transcription/summary from the stored recording, never rejoining the live meeting
-
-#### Scenario: Failed reprocess restores the prior status
-
-- GIVEN a `transcription_error` meeting whose optimistic reprocess fails
-- WHEN the rollback runs
-- THEN the UI status is restored to `transcription_error`, not `completed`
-
-#### Scenario: transcription_error does not offer the destructive rejoin retry
-
-- GIVEN a meeting in `transcription_error`
-- WHEN the detail view renders
-- THEN the `retryMeetingAction` full-rejoin button MUST NOT appear
-
-### Requirement: Dashboard filtering and badge for transcription_error
-
-In `apps/web/src/components/DashboardClient.tsx`, `transcription_error` MUST fold into the existing
-"Con Error" status filter tab (no new tab) and MUST render with a distinct badge variant from plain
-`error` (e.g. `"warning"` instead of `"destructive"`), since the recording is fine and only
-post-processing needs a retry.
-
-#### Scenario: transcription_error appears under the error filter with a warning badge
-
-- GIVEN a meeting in `transcription_error`
-- WHEN the dashboard "Con Error" filter is active
-- THEN the meeting appears with a `warning`-variant badge distinct from `error`'s `destructive`
-
-**TDD:** extend `apps/__tests__/shared/domain/meetingStatus.test.ts` for the union/transitions/label/
-active-set assertions; extend the worker service test for the catch-block status; web component gating and
-`canReprocess`/rollback assertions belong to the mirrored web test area
-(`apps/__tests__/web/...`) per the AGENTS.md TDD mandate. Purely visual badge styling falls under the
-manual/visual exception.
+**TDD:** extender `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts` (live-DB)
+para `existsForMeetingAndGrantee`; nuevo `apps/__tests__/worker/services/autoJoinService.test.ts` (o
+extender el test de auto-join existente) para la rama de creación de grant, el filtrado por email
+matcheado, la exclusión del Owner y la idempotencia.
 
 ---
 
-## Non-Goals
+## Problema 3 — El fallo de transcripción es un estado recuperable, el video permanece visible
 
-- **Reworking the atomic claim** (`claimNextPending`) — it is already correct (`for update skip locked`).
-- **Owner selection by calendar organizer** — `Owner` stays race-decided; `organizerEmail` MUST NOT drive it.
-- **Auto-grants for manually-enqueued meetings** — `INVITE_BOT`/dashboard/chat stay suggestion-only (009).
-- **Auto-grants for unregistered attendees** — only registered `users.email` matches qualify.
-- **Backfilling grants for historical auto-join meetings** — behavior applies going forward.
-- **Touching deployment-contract files** — no `Dockerfile.*`, `docker-compose*.yml`, `railway.json`, or CI changes.
+### Requisito: Nuevo status recuperable `transcription_error`
 
-## Migration Note
+El sistema DEBE agregar un valor `transcription_error` a `meetingStatusEnum`
+(`packages/shared/src/db/schema.ts`) mediante una migración aditiva `ALTER TYPE ... ADD VALUE` (dentro del
+alcance de `drizzle/0007` o en su propio archivo numerado — aditiva, a diferencia del recreate de enum de
+009). En `packages/shared/src/domain/meetingStatus.ts` DEBE agregarse a la unión `MeetingStatus`, a
+`ALLOWED_TRANSITIONS` como **recuperable** (puede transicionar a `transcribing`/`summarizing`/`completed`,
+a diferencia de los terminales `error`/`rejected`), y a `MEETING_STATUS_LABELS_ES` con la etiqueta `"Error
+de transcripción"`. NO DEBE agregarse a `ACTIVE_PROCESSING_STATUSES` (es un estado accionable
+cuasi-resuelto, del mismo grupo que `error`/`rejected`).
 
-Migrations land as `drizzle/0007_*.sql` (partial unique index on `meetings (source_provider,
-source_event_id) WHERE source_event_id IS NOT NULL`, plus the additive `ALTER TYPE meeting_status ADD
-VALUE 'transcription_error'`). Adding an enum value is straightforward and does not require recreating the
-type (unlike 009, which recreated it to remove a value). Pre-existing `error` rows are not retroactively
-reclassified.
+#### Escenario: transcription_error es recuperable, no terminal
+
+- DADO una reunión en status `transcription_error`
+- CUANDO se valida una transición a `transcribing`/`summarizing`/`completed`
+- ENTONCES la transición se permite (mientras que `error`/`rejected` requieren reiniciar desde `pending`)
+
+### Requisito: Un fallo de post-procesamiento de IA setea transcription_error, no error
+
+En `apps/worker/src/services/meetingWorkerService.ts`, el video se sube y
+`recordingFilePath`/`recordingStorageKey` se persisten (~líneas 120-126) ANTES de la fase de IA. Cuando la
+fase de transcripción/resumen de IA lanza una excepción, su bloque catch (~líneas 165-173) DEBE setear
+`status: "transcription_error"` en vez del `"error"` genérico. El catch externo para fallos reales de
+grabación/unión (~líneas 174-193), donde nunca se produjo ningún video, DEBE mantener `"error"` — sin
+cambios.
+
+#### Escenario: Un fallo de IA después de una grabación buena produce transcription_error
+
+- DADO una reunión cuyo video se subió exitosamente y `recordingFilePath` está seteado
+- CUANDO la fase de transcripción/resumen de IA lanza una excepción
+- ENTONCES el status pasa a `transcription_error` (no `error`)
+
+#### Escenario: Un fallo de unión/grabación sigue produciendo error
+
+- DADO una reunión que falló al unirse o grabar (no se produjo ningún video)
+- CUANDO el catch externo la maneja
+- ENTONCES el status permanece en `error`
+
+### Requisito: La visibilidad del video se condiciona a la presencia del archivo, no al status completed
+
+En `apps/web/src/components/MeetingDetailsView.tsx`, el reproductor de video (~línea 703) y el link de
+descarga MP4 (~línea 656) DEBEN condicionarse a que `meeting.recordingFilePath` sea truthy en vez de
+`status === "completed"`, para que un video almacenado se muestre sin importar el status.
+
+#### Escenario: El video se muestra en transcription_error
+
+- DADO una reunión en `transcription_error` con `recordingFilePath` seteado
+- CUANDO el Owner abre la vista de detalle
+- ENTONCES el reproductor de video y la descarga MP4 están disponibles
+
+### Requisito: Se ofrece reprocesar (no una reunión completa nueva) para transcription_error
+
+`canReprocess` DEBE ser adicionalmente `true` cuando `status === "transcription_error"` (además del
+`status === "completed" && (!rawTranscription || !summary)` de hoy), todavía requiriendo que
+`recordingFilePath` esté presente, reutilizando el cableado existente de
+`handleReprocess`/`reprocessMeetingAction` (`MeetingDetailsView.tsx:116-133`) y `reprocessMeetingService`
+(`meetingRecoveryService.ts:19-91`) tal cual — sin botón nuevo, sin acción nueva. El rollback por fallo de
+`handleReprocess` (~líneas 120,125,129) DEBE restaurar el status previo al optimista de la reunión (ahora
+posiblemente `transcription_error`) en vez de hardcodear `"completed"`. El reintento destructivo de reunión
+completa (`status === "error" || "rejected"` → `retryMeetingAction` → `retryRejectedMeeting`,
+`meetingRecoveryService.ts:94-110`, línea ~641) NO DEBE matchear `transcription_error`.
+
+#### Escenario: Reprocesar reintenta desde almacenamiento sin volver a unirse
+
+- DADO una reunión en `transcription_error` con `recordingFilePath` seteado
+- CUANDO el Owner dispara el reprocesamiento
+- ENTONCES `reprocessMeetingTranscription` reintenta la transcripción/resumen desde la grabación
+  almacenada, sin volver a unirse jamás a la reunión en vivo
+
+#### Escenario: Un reprocesamiento fallido restaura el status previo
+
+- DADO una reunión en `transcription_error` cuyo reprocesamiento optimista falla
+- CUANDO corre el rollback
+- ENTONCES el status de la UI se restaura a `transcription_error`, no a `completed`
+
+#### Escenario: transcription_error no ofrece el reintento destructivo de reunión completa
+
+- DADO una reunión en `transcription_error`
+- CUANDO la vista de detalle renderiza
+- ENTONCES el botón de reunión completa nueva de `retryMeetingAction` NO DEBE aparecer
+
+### Requisito: Filtrado y badge del dashboard para transcription_error
+
+En `apps/web/src/components/DashboardClient.tsx`, `transcription_error` DEBE plegarse dentro de la pestaña
+de filtro de status "Con Error" existente (sin pestaña nueva) y DEBE renderizarse con una variante de badge
+distinta de la de `error` plano (por ejemplo, `"warning"` en vez de `"destructive"`), dado que la grabación
+está bien y solo el post-procesamiento necesita un reintento.
+
+#### Escenario: transcription_error aparece bajo el filtro de error con un badge warning
+
+- DADO una reunión en `transcription_error`
+- CUANDO el filtro "Con Error" del dashboard está activo
+- ENTONCES la reunión aparece con un badge de variante `warning`, distinto del `destructive` de `error`
+
+**TDD:** extender `apps/__tests__/shared/domain/meetingStatus.test.ts` para las aserciones de
+unión/transiciones/label/active-set; extender el test del servicio del worker para el status del bloque
+catch; las condiciones de gating del componente web y las aserciones de `canReprocess`/rollback pertenecen
+al área de test web espejo (`apps/__tests__/web/...`) según el mandato TDD de AGENTS.md. El estilado
+puramente visual del badge cae bajo la excepción manual/visual.
+
+---
+
+## No-objetivos
+
+- **Rehacer el claim atómico** (`claimNextPending`) — ya es correcto (`for update skip locked`).
+- **Selección del Owner por el organizador del calendario** — `Owner` sigue decidido por la carrera;
+  `organizerEmail` NO DEBE determinarlo.
+- **Auto-grants para reuniones encoladas manualmente** — `INVITE_BOT`/dashboard/chat siguen siendo
+  solo-sugerencia (009).
+- **Auto-grants para asistentes no registrados** — solo califican los matches con `users.email` registrado.
+- **Backfill de grants para reuniones auto-join históricas** — el comportamiento aplica hacia adelante.
+- **Tocar archivos del contrato de despliegue** — sin cambios a `Dockerfile.*`, `docker-compose*.yml`,
+  `railway.json`, ni a CI.
+
+## Nota de migración
+
+Las migraciones aterrizan como `drizzle/0007_*.sql` (índice único parcial en `meetings (source_provider,
+source_event_id) WHERE source_event_id IS NOT NULL`, más el `ALTER TYPE meeting_status ADD VALUE
+'transcription_error'` aditivo). Agregar un valor de enum es directo y no requiere recrear el tipo (a
+diferencia de 009, que lo recreó para eliminar un valor). Las filas `error` preexistentes no se
+reclasifican retroactivamente.
