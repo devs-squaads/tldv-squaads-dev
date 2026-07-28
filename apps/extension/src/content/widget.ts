@@ -1,3 +1,4 @@
+import { resolveBadgeState } from "../shared/badge-policy";
 import {
   RETRYABLE_TERMINAL_STATUSES,
   STATUS_COLORS,
@@ -253,8 +254,8 @@ export class MeetingWidget {
   }
 
   private syncBadge() {
-    if (this.state.type === "active" && this.state.status === "recording") {
-      void send({ type: "SET_BADGE", state: "recording" });
+    if (this.state.type === "active") {
+      void send({ type: "SET_BADGE", state: resolveBadgeState(this.state.status) });
       return;
     }
     if (this.state.type === "error") {

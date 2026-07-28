@@ -1,3 +1,4 @@
+import { resolveBadgeState } from "../shared/badge-policy";
 import { DEFAULT_SETTINGS, SEARCH_POLL_INTERVAL_MS, STATUS_LABELS } from "../shared/constants";
 import { detectMeetingProvider, normalizeMeetingUrl } from "../shared/meeting-url";
 import { logInfo, logWarn } from "../shared/logger";
@@ -296,13 +297,7 @@ function applyMeetingEntry(entry: ActiveMeetingEntry | null) {
   currentMeetingId = entry.meetingId;
   runtimeStatus.textContent = `Status: ${STATUS_LABELS[entry.status]}`;
 
-  if (entry.status === "recording") {
-    syncBadge("recording");
-  } else if (entry.status === "error" || entry.status === "transcription_error") {
-    syncBadge("error");
-  } else {
-    syncBadge("clear");
-  }
+  syncBadge(resolveBadgeState(entry.status));
 
   const decision = getPopupMeetingEntryDecision(entry.status);
   if (decision.keepSubscription) {
