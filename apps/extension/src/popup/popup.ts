@@ -1,7 +1,8 @@
-import { ACTIVE_STATUSES, DEFAULT_SETTINGS, SEARCH_POLL_INTERVAL_MS, STATUS_LABELS } from "../shared/constants";
+import { DEFAULT_SETTINGS, SEARCH_POLL_INTERVAL_MS, STATUS_LABELS } from "../shared/constants";
 import { detectMeetingProvider, normalizeMeetingUrl } from "../shared/meeting-url";
 import { logInfo, logWarn } from "../shared/logger";
 import { getConnectableSiteContext, normalizeOrigin } from "../shared/origin";
+import { getPopupMeetingEntryDecision } from "./meeting-entry-policy";
 import type {
   ActiveMeetingEntry,
   ExtensionConnectionResult,
@@ -297,13 +298,14 @@ function applyMeetingEntry(entry: ActiveMeetingEntry | null) {
 
   if (entry.status === "recording") {
     syncBadge("recording");
-  } else if (entry.status === "error") {
+  } else if (entry.status === "error" || entry.status === "transcription_error") {
     syncBadge("error");
   } else {
     syncBadge("clear");
   }
 
-  if (ACTIVE_STATUSES.includes(entry.status)) {
+  const decision = getPopupMeetingEntryDecision(entry.status);
+  if (decision.keepSubscription) {
     setInviteVisibility(false);
     setInviteAvailability(false);
     subscribeToMeeting(entry.meetingId);
@@ -313,7 +315,7 @@ function applyMeetingEntry(entry: ActiveMeetingEntry | null) {
 
   unsubscribeFromMeeting();
   setInviteVisibility(true);
-  setInviteAvailability(true);
+  setInviteAvailability(decision.allowInvite);
   void refreshWidgetState();
 }
 

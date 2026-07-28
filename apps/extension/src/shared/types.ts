@@ -10,7 +10,8 @@ export type MeetingStatus =
   | "completed"
   | "admission_timeout"
   | "rejected"
-  | "error";
+  | "error"
+  | "transcription_error";
 
 export interface ExtensionSettings {
   apiBaseUrl: string;
