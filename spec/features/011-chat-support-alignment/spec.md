@@ -11,7 +11,7 @@ panel; the `ReportBugButton` is loose at the panel bottom and 100% English insid
 UI; the corpus/`STARTER_TOPICS` still describe pre-009/010 behavior (public share links, missing
 `transcription_error`); and `searchMeetingsTool` hardcodes a status enum that omits `transcription_error`.
 
-Domain vocabulary is fixed by root `CONTEXT.md` — this spec uses those exact terms: **Reportar un
+Domain vocabulary is fixed by `docs/CONTEXT.md` — this spec uses those exact terms: **Reportar un
 problema**, **Soporte**, **Acceso** / **dar acceso**, **Enlace de acceso restringido**. Two sequential
 PRs, each under the 400-line budget.
 

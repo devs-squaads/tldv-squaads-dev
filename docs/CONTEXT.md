@@ -109,6 +109,42 @@ siendo solo sugerencia (sin cambios).
 _Avoid_: usar "Access Grant" a secas para este caso sin aclarar que es la excepción automática — el
 `Access Grant` normal siempre lo dispara el `Owner`.
 
+# Asistente
+
+El chat embebido en la web app y su superficie de soporte.
+
+## Language
+
+**Squaads Assistant**:
+El asistente de chat embebido en la web app (`apps/web/src/components/chat/`). Responde en español
+(voseo) usando el corpus de conocimiento y herramientas del sistema.
+
+**Corpus de conocimiento**:
+El conjunto de documentos estáticos que alimenta el system prompt del asistente
+(`apps/web/src/integrations/chat/knowledge/`). Es la única fuente de "entrenamiento" del chat; debe
+reflejar el estado real de las features desplegadas.
+
+**Soporte**:
+Topic del Squaads Assistant que concentra la ayuda al usuario y aloja la entrada "Reportar un problema".
+_Avoid_: support, ayuda.
+
+**Reportar un problema**:
+Acción del usuario que envía un reporte al canal de Discord del equipo mediante el módulo `bug-report`.
+En la UI vive dentro del topic Soporte del asistente y en el detalle de reunión. Registro de la copy: voseo.
+_Avoid_: Report a bug, reportar un error, reportar un bug.
+
+**Acceso** (copy de usuario para `Access Grant`):
+En cualquier texto visible al usuario, `Access Grant` siempre se dice "acceso" o "dar acceso" — nunca el
+nombre técnico. Se otorga manualmente (Owner comparte) o automáticamente a co-asistentes del auto-join
+(ADR-0007).
+_Avoid_ (en UI): Access Grant, permiso, share.
+
+**Enlace de acceso restringido** (copy de usuario para `restricted_email`):
+Único tipo de `meeting_shares` vigente — un enlace enviado por email a un destinatario concreto. Los
+enlaces públicos fueron eliminados en la feature 009 (ver ADR-0005) y no deben mencionarse como opción
+vigente en ningún texto de cara al usuario.
+_Avoid_: link público, share público, enlace público.
+
 **Share Request** (ver ADR-0008):
 Propuesta de compartir (destinatarios + tipo de acceso) creada por un `Owner` cuyo `Authorized Account`
 tiene `role: member`. No es todavía un `Access Grant` ni un `meeting_shares` — queda en estado pendiente
