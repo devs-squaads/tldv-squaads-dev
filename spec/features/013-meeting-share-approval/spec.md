@@ -1,308 +1,323 @@
-# 013 · Member-Share Admin Approval + Real SMTP Email Provider
+# 013 · Aprobación de Admin para Compartidos de Member + Proveedor SMTP de Email Real
 
-**Status:** spec (proposal confirmed)
+**Estado:** spec (proposal confirmed)
 
-## Purpose
+## Propósito
 
-Outbound sharing MUST gain oversight: an `Owner` whose `Authorized Account` role is `member` proposes a
-**Share Request**; any platform `admin` approves or rejects it, and only approval creates the real
-`Access Grant`/`meeting_shares` row and sends a real email. An `Owner` whose role is `admin` shares
-directly, unchanged. Independently, email MUST stop being a console log: a real `SmtpEmailProvider`
-delivers share links and OTP codes.
+El compartir saliente DEBE ganar supervisión: un `Owner` cuyo rol de `Authorized Account` es `member`
+propone un **Share Request**; cualquier `admin` de la plataforma lo aprueba o rechaza, y solo la
+aprobación crea la fila real de `Access Grant`/`meeting_shares` y envía un email real. Un `Owner` cuyo rol
+es `admin` comparte directamente, sin cambios. De forma independiente, el email DEBE dejar de ser un
+console log: un `SmtpEmailProvider` real entrega los links de compartido y los códigos OTP.
 
-Domain vocabulary is fixed by `docs/CONTEXT.md` ("Meeting Ownership & Sharing"): **Owner**, **Access
-Grant**, **Participant**, **Auto-Join Co-Attendee Grant**, **Share Request**. This spec uses those exact
-terms — no synonyms. Source ADRs: `docs/adr/0004-smtp-email-provider.md`,
+El vocabulario de dominio está fijado por `docs/CONTEXT.md` ("Meeting Ownership & Sharing"): **Owner**,
+**Access Grant**, **Participant**, **Auto-Join Co-Attendee Grant**, **Share Request**. Este spec usa esos
+términos exactos — sin sinónimos. ADRs fuente: `docs/adr/0004-smtp-email-provider.md`,
 `docs/adr/0008-member-share-admin-approval.md`.
 
-## MODIFIED Requirements (supersede feature 009)
+## MODIFIED Requirements (reemplaza la feature 009)
 
-### Requirement: Role-branched sharing authority
+### Requirement: Autoridad de compartido bifurcada por rol
 
-Only a meeting's `Owner` MAY initiate sharing or revocation for that meeting; role MUST NOT grant a
-non-Owner any sharing authority. When the `Owner`'s `authorized_accounts.role` is `admin`, the
-`Access Grant` / `meeting_shares` row MUST be created directly, exactly as feature 009 specified. When
-it is `member`, the system MUST create a pending `Share Request` instead and MUST NOT create any
-downstream row or send any email until an `admin` approves.
-(Previously: ADR-0005/009 required Owner-only with no role branch — "only the Owner, no exceptions".)
+Solo el `Owner` de una reunión PUEDE iniciar el compartido o la revocación de esa reunión; el rol NO DEBE
+otorgarle autoridad de compartido a un no-Owner. Cuando el `role` de `authorized_accounts` del `Owner` es
+`admin`, la fila de `Access Grant` / `meeting_shares` DEBE crearse directamente, exactamente como
+especificó la feature 009. Cuando es `member`, el sistema DEBE crear un `Share Request` pendiente en su
+lugar y NO DEBE crear ninguna fila subsiguiente ni enviar ningún email hasta que un `admin` lo apruebe.
+(Anteriormente: ADR-0005/009 exigía Owner-only sin bifurcación por rol — "solo el Owner, sin
+excepciones".)
 
-#### Scenario: Admin Owner shares directly
+#### Scenario: El Owner admin comparte directamente
 
-- GIVEN `Owner` O of meeting M with `role = admin`
-- WHEN O shares M with any recipient
-- THEN the `Access Grant` (registered) or `meeting_shares` (unregistered) row is created immediately
-- AND no `Share Request` is created
+- DADO el `Owner` O de la reunión M con `role = admin`
+- CUANDO O comparte M con cualquier destinatario
+- ENTONCES la fila de `Access Grant` (registrado) o `meeting_shares` (no registrado) se crea de
+  inmediato
+- Y no se crea ningún `Share Request`
 
-#### Scenario: Member Owner always goes through a Share Request
+#### Scenario: El Owner member siempre pasa por un Share Request
 
-- GIVEN `Owner` O of meeting M with `role = member`
-- WHEN O shares M with any recipient, by any recipient-selection mode
-- THEN a pending `Share Request` is created and no `Access Grant`/`meeting_shares` row exists yet
-- AND no email is sent
+- DADO el `Owner` O de la reunión M con `role = member`
+- CUANDO O comparte M con cualquier destinatario, por cualquier modo de selección de destinatario
+- ENTONCES se crea un `Share Request` pendiente y todavía no existe ninguna fila de
+  `Access Grant`/`meeting_shares`
+- Y no se envía ningún email
 
-#### Scenario: Non-Owner is still rejected regardless of role
+#### Scenario: Un no-Owner sigue siendo rechazado sin importar el rol
 
-- GIVEN authenticated user X who is not the `Owner` of M, with `role = admin` or `member`
-- WHEN X attempts to share or revoke on M
-- THEN the operation MUST be rejected (an `admin` acts only on an existing `Share Request`)
+- DADO un usuario autenticado X que no es el `Owner` de M, con `role = admin` o `member`
+- CUANDO X intenta compartir o revocar sobre M
+- ENTONCES la operación DEBE ser rechazada (un `admin` actúa solo sobre un `Share Request` existente)
 
-#### Scenario: Meeting visibility is unaffected
+#### Scenario: La visibilidad de la reunión no se ve afectada
 
-- GIVEN user A with `role = admin` who neither owns M nor holds a live `Access Grant`
-- WHEN A lists or opens M
-- THEN access MUST still be denied (009's no-role-bypass visibility rule is untouched)
+- DADO el usuario A con `role = admin` que ni es dueño de M ni tiene un `Access Grant` vigente
+- CUANDO A lista o abre M
+- ENTONCES el acceso DEBE seguir siendo denegado (la regla de visibilidad sin bypass de rol de 009 queda
+  intacta)
 
 ## ADDED Requirements
 
-### Requirement: Recipient-selection modes
+### Requirement: Modos de selección de destinatario
 
-The sharing surface MUST offer exactly three recipient-selection modes: (a) all `Participant`s of the
-meeting, (b) a chosen subset of `Participant`s, (c) an email address not present in the meeting. Every
-mode MUST resolve to one recipient per outbound unit — mode (a) MUST expand into one `Share Request` (or
-one direct row, for an `admin` `Owner`) per `Participant`, never a bundled record.
+La superficie de compartido DEBE ofrecer exactamente tres modos de selección de destinatario: (a) todos
+los `Participant`s de la reunión, (b) un subconjunto elegido de `Participant`s, (c) una dirección de
+email que no está presente en la reunión. Cada modo DEBE resolver a un destinatario por unidad saliente
+— el modo (a) DEBE expandirse en un `Share Request` (o una fila directa, para un `Owner` `admin`) por
+`Participant`, nunca un registro agrupado.
 
-#### Scenario: Share with all participants expands per recipient
+#### Scenario: Compartir con todos los participantes se expande por destinatario
 
-- GIVEN meeting M with 3 `Participant`s and a `member` `Owner`
-- WHEN the `Owner` selects "all participants" and confirms
-- THEN 3 pending `Share Request`s are created, one per recipient
+- DADO la reunión M con 3 `Participant`s y un `Owner` `member`
+- CUANDO el `Owner` selecciona "todos los participantes" y confirma
+- ENTONCES se crean 3 `Share Request`s pendientes, uno por destinatario
 
-#### Scenario: Subset selection
+#### Scenario: Selección de subconjunto
 
-- GIVEN meeting M with 3 `Participant`s
-- WHEN the `Owner` selects 2 of them and confirms
-- THEN exactly 2 recipients are processed and the unselected `Participant` gets nothing
+- DADO la reunión M con 3 `Participant`s
+- CUANDO el `Owner` selecciona 2 de ellos y confirma
+- ENTONCES exactamente 2 destinatarios son procesados y el `Participant` no seleccionado no recibe nada
 
-#### Scenario: Email not in the meeting
+#### Scenario: Email que no está en la reunión
 
-- GIVEN meeting M and an email address that is not a `Participant`
-- WHEN the `Owner` enters it and confirms
-- THEN it is processed as a single recipient, resolved as registered (`Access Grant`) or unregistered
-  (`meeting_shares`) by the same rule feature 009 already applies
+- DADO la reunión M y una dirección de email que no es `Participant`
+- CUANDO el `Owner` la ingresa y confirma
+- ENTONCES se procesa como un único destinatario, resuelto como registrado (`Access Grant`) o no
+  registrado (`meeting_shares`) por la misma regla que ya aplica la feature 009
 
-### Requirement: Access types and defaults
+### Requirement: Tipos de acceso y valores por defecto
 
-The system MUST support three access types per recipient: `single_use`, `temporary`, and `permanent`.
-`single_use` MUST be offered ONLY for unregistered recipients (`meeting_shares` path) and MUST become
-unusable on the first successful OTP `verifyAccess()`. `temporary` MUST let the requesting `Owner` set
-any day count, with 15 days pre-filled as the default rather than fixed. `permanent` MUST be the default
-access type for `Participant`s.
+El sistema DEBE soportar tres tipos de acceso por destinatario: `single_use`, `temporary` y `permanent`.
+`single_use` DEBE ofrecerse SOLO para destinatarios no registrados (camino `meeting_shares`) y DEBE
+volverse inutilizable en la primera verificación OTP `verifyAccess()` exitosa. `temporary` DEBE permitir
+que el `Owner` solicitante fije cualquier cantidad de días, con 15 días precargados como valor por
+defecto en lugar de fijo. `permanent` DEBE ser el tipo de acceso por defecto para `Participant`s.
 
-#### Scenario: single_use dies on first successful verification
+#### Scenario: single_use muere en la primera verificación exitosa
 
-- GIVEN a `single_use` share for an unregistered recipient
-- WHEN the recipient completes OTP `verifyAccess()` successfully for the first time
-- THEN the share becomes unusable for any subsequent access attempt
+- DADO un compartido `single_use` para un destinatario no registrado
+- CUANDO el destinatario completa `verifyAccess()` de OTP exitosamente por primera vez
+- ENTONCES el compartido se vuelve inutilizable para cualquier intento de acceso posterior
 
-#### Scenario: single_use is not offered to registered recipients
+#### Scenario: single_use no se ofrece a destinatarios registrados
 
-- GIVEN a recipient email matching a registered `users.email`
-- WHEN the access-type options are presented
-- THEN `single_use` MUST NOT be selectable, and only `temporary` or `permanent` are available
+- DADO un email de destinatario que coincide con un `users.email` registrado
+- CUANDO se presentan las opciones de tipo de acceso
+- ENTONCES `single_use` NO DEBE ser seleccionable, y solo `temporary` o `permanent` están disponibles
 
-#### Scenario: temporary day count is editable, not fixed
+#### Scenario: La cantidad de días de temporary es editable, no fija
 
-- GIVEN the `Owner` selects `temporary`
-- WHEN the day-count field is presented
-- THEN it is pre-filled with 15
-- AND the `Owner` MAY change it to any other valid day count, which is the value carried into the request
+- DADO que el `Owner` selecciona `temporary`
+- CUANDO se presenta el campo de cantidad de días
+- ENTONCES viene precargado con 15
+- Y el `Owner` PUEDE cambiarlo a cualquier otra cantidad de días válida, que es el valor que se lleva al
+  request
 
-#### Scenario: permanent is the default for participants
+#### Scenario: permanent es el valor por defecto para participantes
 
-- GIVEN a `Participant` selected as a recipient
-- WHEN the access type is not explicitly changed
-- THEN the access type used is `permanent`
+- DADO un `Participant` seleccionado como destinatario
+- CUANDO el tipo de acceso no se cambia explícitamente
+- ENTONCES el tipo de acceso usado es `permanent`
 
-### Requirement: Share Request lifecycle
+### Requirement: Ciclo de vida del Share Request
 
-A `Share Request` MUST persist exactly one recipient with its proposed access type and day count, and
-MUST occupy exactly one of the states `pending`, `approved`, `rejected`, `cancelled`. The only legal
-transitions are `pending -> approved`, `pending -> rejected`, and `pending -> cancelled`. Approval MUST
-create the downstream row feature 009 already defines (`Access Grant` for registered recipients,
-`meeting_shares` for unregistered ones) and MUST trigger the real email. Rejection and cancellation MUST
-create nothing. The `member` who created a pending `Share Request` MAY cancel it; nobody else MAY.
+Un `Share Request` DEBE persistir exactamente un destinatario con su tipo de acceso y cantidad de días
+propuestos, y DEBE ocupar exactamente uno de los estados `pending`, `approved`, `rejected`, `cancelled`.
+Las únicas transiciones legales son `pending -> approved`, `pending -> rejected` y `pending -> cancelled`.
+La aprobación DEBE crear la fila subsiguiente que ya define la feature 009 (`Access Grant` para
+destinatarios registrados, `meeting_shares` para los no registrados) y DEBE disparar el email real. El
+rechazo y la cancelación NO DEBEN crear nada. El `member` que creó un `Share Request` pendiente PUEDE
+cancelarlo; nadie más PUEDE.
 
-#### Scenario: Approval creates the downstream row and emails
+#### Scenario: La aprobación crea la fila subsiguiente y envía el email
 
-- GIVEN a pending `Share Request` for an unregistered recipient with `temporary`, 15 days
-- WHEN an `admin` approves it
-- THEN the request becomes `approved`, a `meeting_shares` row is created with a 15-day expiry
-- AND the recipient receives a real email with the share link
+- DADO un `Share Request` pendiente para un destinatario no registrado con `temporary`, 15 días
+- CUANDO un `admin` lo aprueba
+- ENTONCES el request pasa a `approved`, se crea una fila de `meeting_shares` con una expiración de 15
+  días
+- Y el destinatario recibe un email real con el link de compartido
 
-#### Scenario: Rejection creates nothing
+#### Scenario: El rechazo no crea nada
 
-- GIVEN a pending `Share Request`
-- WHEN an `admin` rejects it
-- THEN the request becomes `rejected` and no `Access Grant`/`meeting_shares` row exists
-- AND no email is sent to the recipient
+- DADO un `Share Request` pendiente
+- CUANDO un `admin` lo rechaza
+- ENTONCES el request pasa a `rejected` y no existe ninguna fila de `Access Grant`/`meeting_shares`
+- Y no se envía ningún email al destinatario
 
-#### Scenario: Author cancels their own pending request
+#### Scenario: El autor cancela su propio request pendiente
 
-- GIVEN a pending `Share Request` created by `member` Owner O
-- WHEN O cancels it
-- THEN it becomes `cancelled` and no downstream row is created
+- DADO un `Share Request` pendiente creado por el `Owner` `member` O
+- CUANDO O lo cancela
+- ENTONCES pasa a `cancelled` y no se crea ninguna fila subsiguiente
 
-#### Scenario: A resolved request cannot transition again
+#### Scenario: Un request resuelto no puede transicionar de nuevo
 
-- GIVEN a `Share Request` already in `approved`, `rejected`, or `cancelled`
-- WHEN any actor attempts to approve, reject, or cancel it
-- THEN the operation MUST be rejected and the state MUST NOT change
+- DADO un `Share Request` que ya está en `approved`, `rejected` o `cancelled`
+- CUANDO cualquier actor intenta aprobarlo, rechazarlo o cancelarlo
+- ENTONCES la operación DEBE ser rechazada y el estado NO DEBE cambiar
 
-#### Scenario: Only the author may cancel
+#### Scenario: Solo el autor puede cancelar
 
-- GIVEN a pending `Share Request` created by `member` Owner O
-- WHEN another `member` or an `admin` attempts to cancel it
-- THEN the operation MUST be rejected
+- DADO un `Share Request` pendiente creado por el `Owner` `member` O
+- CUANDO otro `member` o un `admin` intenta cancelarlo
+- ENTONCES la operación DEBE ser rechazada
 
-### Requirement: Platform-wide admin approval authority
+### Requirement: Autoridad de aprobación admin a nivel de plataforma
 
-Any `Authorized Account` with `role = admin` MUST be able to approve or reject ANY pending `Share
-Request`, regardless of whether that admin is a `Participant`, `Owner`, or grantee of the meeting.
-Admins MUST approve or reject a `Share Request` exactly as proposed — recipient, access type, and day
-count MUST NOT be editable by the approver. A non-admin MUST NOT approve or reject.
+Cualquier `Authorized Account` con `role = admin` DEBE poder aprobar o rechazar CUALQUIER `Share Request`
+pendiente, sin importar si ese admin es `Participant`, `Owner` o grantee de la reunión. Los admins DEBEN
+aprobar o rechazar un `Share Request` exactamente como fue propuesto — el destinatario, el tipo de acceso
+y la cantidad de días NO DEBEN ser editables por quien aprueba. Un no-admin NO DEBE aprobar ni rechazar.
 
-#### Scenario: Admin with no relationship to the meeting can decide
+#### Scenario: Un admin sin relación con la reunión puede decidir
 
-- GIVEN `admin` A who is not the `Owner`, not a `Participant`, and holds no `Access Grant` on M
-- WHEN A approves a pending `Share Request` on M
-- THEN the approval succeeds and the downstream row is created as proposed
+- DADO el `admin` A que no es el `Owner`, no es `Participant`, y no tiene ningún `Access Grant` sobre M
+- CUANDO A aprueba un `Share Request` pendiente sobre M
+- ENTONCES la aprobación tiene éxito y la fila subsiguiente se crea tal como fue propuesta
 
-#### Scenario: Non-admin cannot decide
+#### Scenario: Un no-admin no puede decidir
 
-- GIVEN a `member` (including the request's own author)
-- WHEN they attempt to approve or reject a pending `Share Request`
-- THEN the operation MUST be rejected
+- DADO un `member` (incluyendo al propio autor del request)
+- CUANDO intenta aprobar o rechazar un `Share Request` pendiente
+- ENTONCES la operación DEBE ser rechazada
 
-#### Scenario: Decision is as-proposed
+#### Scenario: La decisión es tal como fue propuesta
 
-- GIVEN a pending `Share Request` for recipient R with `temporary`, 30 days
-- WHEN an `admin` approves it
-- THEN the created row uses recipient R with a 30-day expiry, unmodified
+- DADO un `Share Request` pendiente para el destinatario R con `temporary`, 30 días
+- CUANDO un `admin` lo aprueba
+- ENTONCES la fila creada usa al destinatario R con una expiración de 30 días, sin modificar
 
-### Requirement: Silent rejection with passive discovery
+### Requirement: Rechazo silencioso con descubrimiento pasivo
 
-Rejection MUST be silent: the system MUST NOT capture or require a rejection reason, and MUST NOT push
-any active notification (email or in-app) to the requesting `member`. The `member` MUST be able to
-discover the outcome passively: for an unregistered recipient, via the meeting's existing share list; for
-a registered recipient, via the new "Solicitudes y accesos" section (`sdd-design`'s resolution — a
-`Share Request` list covering all statuses, plus a grants list, both inside the existing "Compartir
-reunión" card on `MeetingDetailsView`).
+El rechazo DEBE ser silencioso: el sistema NO DEBE capturar ni exigir un motivo de rechazo, y NO DEBE
+empujar ninguna notificación activa (email o in-app) al `member` solicitante. El `member` DEBE poder
+descubrir el resultado de forma pasiva: para un destinatario no registrado, vía la lista de compartidos
+existente de la reunión; para un destinatario registrado, vía la nueva sección "Solicitudes y accesos"
+(resolución de `sdd-design` — una lista de `Share Request` que cubre todos los estados, más una lista de
+grants, ambas dentro de la card "Compartir reunión" existente en `MeetingDetailsView`).
 
-#### Scenario: No active notice to the member
+#### Scenario: Sin aviso activo al member
 
-- GIVEN a pending `Share Request` created by `member` O
-- WHEN an `admin` rejects it
-- THEN no email and no in-app notification is delivered to O
-- AND no rejection-reason field is requested or persisted
+- DADO un `Share Request` pendiente creado por el `member` O
+- CUANDO un `admin` lo rechaza
+- ENTONCES no se entrega ningún email ni notificación in-app a O
+- Y no se solicita ni persiste ningún campo de motivo de rechazo
 
-#### Scenario: Member sees the outcome passively (unregistered recipient)
+#### Scenario: El member ve el resultado de forma pasiva (destinatario no registrado)
 
-- GIVEN a rejected `Share Request` for an unregistered recipient on meeting M
-- WHEN O reopens M's sharing surface
-- THEN the rejected state is visible in the meeting's existing share list without any notification
+- DADO un `Share Request` rechazado para un destinatario no registrado en la reunión M
+- CUANDO O vuelve a abrir la superficie de compartido de M
+- ENTONCES el estado rechazado es visible en la lista de compartidos existente de la reunión sin ninguna
+  notificación
 
-#### Scenario: Member sees the outcome passively (registered recipient)
+#### Scenario: El member ve el resultado de forma pasiva (destinatario registrado)
 
-- GIVEN a rejected `Share Request` for a registered recipient (`Access Grant` path) on meeting M
-- WHEN O reopens M's sharing surface
-- THEN the rejected state is visible in the new "Solicitudes y accesos" section (all-statuses request
-  list + grants list, per `sdd-design`) without any notification
+- DADO un `Share Request` rechazado para un destinatario registrado (camino `Access Grant`) en la
+  reunión M
+- CUANDO O vuelve a abrir la superficie de compartido de M
+- ENTONCES el estado rechazado es visible en la nueva sección "Solicitudes y accesos" (lista de requests
+  con todos los estados + lista de grants, según `sdd-design`) sin ninguna notificación
 
-### Requirement: Admin notification surface
+### Requirement: Superficie de notificación para admin
 
-The application MUST expose a navbar notification bell on every authenticated page and a dedicated page
-listing pending `Share Request`s, both visible only to `admin` accounts. The bell badge MUST equal the
-GLOBAL count of `Share Request`s in state `pending`. The system MUST NOT track per-admin read state — the
-count is identical for every admin and decreases for all of them the moment any admin resolves a request.
+La aplicación DEBE exponer una campanita de notificación en el navbar de cada página autenticada y una
+página dedicada que liste los `Share Request`s pendientes, ambas visibles solo para cuentas `admin`. El
+badge de la campanita DEBE ser igual a la cuenta GLOBAL de `Share Request`s en estado `pending`. El
+sistema NO DEBE trackear estado de lectura por admin — la cuenta es idéntica para cada admin y disminuye
+para todos ellos en el momento en que cualquier admin resuelve un request.
 
-#### Scenario: Badge equals the global pending count
+#### Scenario: El badge es igual a la cuenta global de pendientes
 
-- GIVEN 4 pending `Share Request`s across any meetings and any authors
-- WHEN any `admin` loads an authenticated page
-- THEN the bell badge shows 4
+- DADO 4 `Share Request`s pendientes entre cualquier reunión y cualquier autor
+- CUANDO cualquier `admin` carga una página autenticada
+- ENTONCES el badge de la campanita muestra 4
 
-#### Scenario: Resolution decrements the count for every admin
+#### Scenario: La resolución decrementa la cuenta para todos los admins
 
-- GIVEN 4 pending requests and admins A and B
-- WHEN A approves one
-- THEN B's badge shows 3 without B having taken any action
+- DADO 4 requests pendientes y los admins A y B
+- CUANDO A aprueba uno
+- ENTONCES el badge de B muestra 3 sin que B haya tomado ninguna acción
 
-#### Scenario: Pending page is admin-only
+#### Scenario: La página de pendientes es admin-only
 
-- GIVEN an authenticated user with `role = member`
-- WHEN they load the pending-requests page
-- THEN access MUST be denied and the bell MUST NOT be rendered for them
+- DADO un usuario autenticado con `role = member`
+- CUANDO carga la página de requests pendientes
+- ENTONCES el acceso DEBE ser denegado y la campanita NO DEBE renderizarse para él
 
-### Requirement: Real SMTP email delivery with environment-split fallback
+### Requirement: Entrega de email SMTP real con fallback dividido por entorno
 
-A `SmtpEmailProvider` implementing the existing `EmailProvider` contract MUST be selectable through the
-existing `EmailProviderFactory` via `EMAIL_PROVIDER`, with no changes required at any existing call site.
-When SMTP configuration is missing or incomplete: outside production the provider MUST fall back to
-console logging so local/dev keeps working; in production it MUST fail loudly AND block the send —
-a production send MUST NEVER silently degrade to a console-only "email".
+Un `SmtpEmailProvider` que implementa el contrato `EmailProvider` existente DEBE ser seleccionable a
+través del `EmailProviderFactory` existente vía `EMAIL_PROVIDER`, sin que se requiera ningún cambio en
+ningún call site existente. Cuando la configuración SMTP falta o está incompleta: fuera de producción el
+provider DEBE caer a console logging para que local/dev siga funcionando; en producción DEBE fallar de
+forma ruidosa Y bloquear el envío — un envío de producción NUNCA DEBE degradarse silenciosamente a un
+"email" solo de console.
 
-#### Scenario: Configured SMTP delivers real email
+#### Scenario: SMTP configurado entrega un email real
 
-- GIVEN complete SMTP configuration and `EMAIL_PROVIDER` selecting SMTP
-- WHEN a `restricted_email` share link or an OTP code is sent
-- THEN it is delivered over SMTP to the recipient's real inbox
+- DADO configuración SMTP completa y `EMAIL_PROVIDER` seleccionando SMTP
+- CUANDO se envía un link de compartido `restricted_email` o un código OTP
+- ENTONCES se entrega vía SMTP a la bandeja de entrada real del destinatario
 
-#### Scenario: Missing config in local/dev falls back to console
+#### Scenario: La configuración faltante en local/dev cae a console
 
-- GIVEN incomplete SMTP configuration outside production
-- WHEN a send is attempted
-- THEN the provider logs to console and the calling flow continues
+- DADO configuración SMTP incompleta fuera de producción
+- CUANDO se intenta un envío
+- ENTONCES el provider loguea en console y el flujo llamante continúa
 
-#### Scenario: Missing config in production fails loudly
+#### Scenario: La configuración faltante en producción falla de forma ruidosa
 
-- GIVEN incomplete SMTP configuration in production
-- WHEN a send is attempted
-- THEN the send MUST be blocked with an explicit, surfaced error
-- AND the message MUST NOT be written to console as a substitute for delivery
+- DADO configuración SMTP incompleta en producción
+- CUANDO se intenta un envío
+- ENTONCES el envío DEBE ser bloqueado con un error explícito y expuesto
+- Y el mensaje NO DEBE escribirse en console como sustituto de la entrega
 
-## Non-Goal Scenarios (MUST NOT happen)
+## Escenarios No-Objetivo (NO DEBEN suceder)
 
-Each mirrors an item deliberately rejected in the proposal's Out-of-Scope list.
+Cada uno refleja un ítem deliberadamente rechazado en la lista Out-of-Scope de la propuesta.
 
-#### Scenario: Owner-assignment race is untouched
+#### Scenario: La carrera de asignación de Owner queda intacta
 
-- GIVEN two concurrent creations for the same `(sourceProvider, sourceEventId)`
-- WHEN this feature is deployed
-- THEN the ADR-0007 unique-insert dedup and the resulting `ownerId` behave exactly as before
+- DADO dos creaciones concurrentes para el mismo `(sourceProvider, sourceEventId)`
+- CUANDO esta feature se despliega
+- ENTONCES el dedup por inserción única de ADR-0007 y el `ownerId` resultante se comportan exactamente
+  igual que antes
 
-#### Scenario: No per-admin read tracking
+#### Scenario: Sin tracking de lectura por admin
 
-- GIVEN admins A and B and a pending `Share Request`
-- WHEN A views the pending-requests page
-- THEN no per-admin seen/read state is persisted and B's badge is unchanged
+- DADO los admins A y B y un `Share Request` pendiente
+- CUANDO A visualiza la página de requests pendientes
+- ENTONCES no se persiste ningún estado de visto/leído por admin y el badge de B no cambia
 
-#### Scenario: No edit or resubmit of a rejected request
+#### Scenario: Sin edición ni reenvío de un request rechazado
 
-- GIVEN a rejected `Share Request`
-- WHEN its author attempts to edit or resubmit it
-- THEN no such action exists; the author MUST create a new `Share Request`
+- DADO un `Share Request` rechazado
+- CUANDO su autor intenta editarlo o reenviarlo
+- ENTONCES no existe tal acción; el autor DEBE crear un `Share Request` nuevo
 
-#### Scenario: Admin cannot edit a pending request
+#### Scenario: El admin no puede editar un request pendiente
 
-- GIVEN a pending `Share Request`
-- WHEN an `admin` attempts to change its recipient, access type, or day count
-- THEN no such action exists; only approve and reject are available
+- DADO un `Share Request` pendiente
+- CUANDO un `admin` intenta cambiar su destinatario, tipo de acceso o cantidad de días
+- ENTONCES no existe tal acción; solo aprobar y rechazar están disponibles
 
-#### Scenario: No email template authoring beyond existing fields
+#### Scenario: Sin autoría de template de email más allá de los campos existentes
 
-- GIVEN an approved `Share Request`
-- WHEN the email is sent
-- THEN it populates only the existing `SendEmailInput.text`/`html` fields with no new templating system
+- DADO un `Share Request` aprobado
+- CUANDO se envía el email
+- ENTONCES solo popula los campos existentes `SendEmailInput.text`/`html`, sin ningún sistema de
+  templating nuevo
 
-## Resolved by sdd-design
+## Resuelto por sdd-design
 
-**Passive rejection surface for registered recipients** — resolved: `MeetingDetailsView` gains a new
-"Solicitudes y accesos" section (all-statuses `Share Request` list + a grants list) inside the existing
-"Compartir reunión" card. See `plan.md`'s file table (`MeetingDetailsView.tsx` row) and the two "Member
-sees the outcome passively" scenarios above.
+**Superficie de rechazo pasiva para destinatarios registrados** — resuelto: `MeetingDetailsView` gana
+una nueva sección "Solicitudes y accesos" (lista de `Share Request` con todos los estados + una lista de
+grants) dentro de la card "Compartir reunión" existente. Ver la tabla de archivos de `plan.md` (fila
+`MeetingDetailsView.tsx`) y los dos escenarios "El member ve el resultado de forma pasiva" de arriba.
 
-## Notes
+## Notas
 
-- Env docs: `README.md` is the only real sync target for the new `SMTP_*` variables — no `.env*.example`
-  files exist in this repo (contradicting AGENTS.md's stated convention).
-- All new logic is test-first per AGENTS.md, in `apps/__tests__/` mirror paths.
+- Docs de env: `README.md` es el único target de sync real para las nuevas variables `SMTP_*` — no
+  existe ningún archivo `.env*.example` en este repo (contradiciendo la convención declarada en
+  AGENTS.md).
+- Toda la lógica nueva es test-first según AGENTS.md, en los paths espejo de `apps/__tests__/`.

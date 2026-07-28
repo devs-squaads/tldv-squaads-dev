@@ -1,86 +1,89 @@
-# Tasks: Chat Support Alignment
+# Tareas: Alineación del Soporte de Chat
 
-## Review Workload Forecast
+## Pronóstico de carga de revisión
 
-| Field | Value |
+| Campo | Valor |
 |-------|-------|
-| Estimated changed lines | PR-A ~90-150 (mostly string-literal edits + 1 flag + 1 corpus doc); PR-B ~140-200 (1 type refactor + 1 enum wiring + 3 corpus edits + 1 new doc + 2 topic answers); total ~230-350 across both PRs |
-| 400-line budget risk | Low — each PR independently well under 400; driven by literal/copy edits, not new logic |
-| Chained PRs recommended | Yes — already binding per the PR structure decided upstream, not a size-risk trigger |
-| Suggested split | PR-A (button placement + Spanish copy) → PR-B (knowledge corpus + status enum), both off `dev` |
-| Delivery strategy | ask-on-risk |
-| Chain strategy | stacked-to-main — PR-A and PR-B each branch from `dev` and merge back to `dev` in sequence; PR-B only needs PR-A merged first for corpus consistency (Soporte answer), not a branch-of-branch dependency |
+| Líneas cambiadas estimadas | PR-A ~90-150 (mayormente ediciones de string-literals + 1 flag + 1 doc de corpus); PR-B ~140-200 (1 refactor de tipo + 1 wiring de enum + 3 ediciones de corpus + 1 doc nuevo + 2 respuestas de topic); total ~230-350 entre ambos PRs |
+| Riesgo del presupuesto de 400 líneas | Bajo — cada PR está independientemente muy por debajo de 400; impulsado por ediciones de literales/copy, no lógica nueva |
+| Se recomiendan PRs encadenados | Sí — ya es vinculante según la estructura de PR decidida río arriba, no un disparador por riesgo de tamaño |
+| División sugerida | PR-A (ubicación del botón + copy en español) → PR-B (corpus de conocimiento + enum de estados), ambos desde `dev` |
+| Estrategia de entrega | ask-on-risk |
+| Estrategia de cadena | stacked-to-main — el PR-A y el PR-B se ramifican cada uno desde `dev` y vuelven a mergearse en `dev` en secuencia; el PR-B solo necesita que el PR-A esté mergeado primero por consistencia del corpus (respuesta de Soporte), no una dependencia de rama-sobre-rama |
 
-Decision needed before apply: No — PR structure and branch names are already binding; both slices forecast Low risk, so no further chain-strategy choice is needed.
-Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
-400-line budget risk: Low
+Decisión necesaria antes del apply: No — la estructura de PRs y los nombres de rama ya son vinculantes;
+ambas porciones pronostican riesgo Bajo, así que no hace falta ninguna otra elección de estrategia de
+cadena.
+Se recomiendan PRs encadenados: Sí
+Estrategia de cadena: stacked-to-main
+Riesgo del presupuesto de 400 líneas: Bajo
 
-### Suggested Work Units
+### Unidades de trabajo sugeridas
 
-| Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
+| Unidad | Objetivo | PR probable | Comando de test focalizado | Harness en runtime | Límite de rollback |
 |---|---|---|---|---|---|
-| 1 | `showBugReport` flag + button relocation + Spanish voseo copy + Soporte answer/corpus fix | PR-A (`feat/011-01-report-button-soporte`) | `bun test apps/__tests__/web/components/report-bug-button.logic.test.ts` | Manual: open panel, click Soporte card, confirm button appears under the answer and reset clears it (visual-UI TDD exception, AGENTS.md) | Revert `ChatWidget.tsx`, `ChatMessages.tsx`, `ReportBugButton.tsx`, `reportBugButton.logic.ts`, `documentCorpus.ts` (1 doc), the logic test |
-| 2 | `MEETING_STATUSES` canonical export + `searchMeetingsTool` enum consumption + 009/010 corpus refresh | PR-B (`feat/011-02-chat-knowledge-refresh`) | `bun test apps/__tests__/shared/domain/meeting-status.test.ts apps/__tests__/web/integrations/chat-tools-definitions.test.ts` | Manual: ask the assistant "¿por qué mi reunión tiene error de transcripción?" and "¿cómo comparto una reunión?"; confirm answers match 009/010 reality (no public link, transcription_error is recoverable) | Revert `meetingStatus.ts`, `definitions.ts`, `documentCorpus.ts` (2 edits + 1 doc), `ChatMessages.tsx` (2 answers), new test files |
+| 1 | Flag `showBugReport` + reubicación del botón + copy en español voseo + fix de la respuesta/corpus de Soporte | PR-A (`feat/011-01-report-button-soporte`) | `bun test apps/__tests__/web/components/report-bug-button.logic.test.ts` | Manual: abrir el panel, hacer click en la tarjeta de Soporte, confirmar que el botón aparece debajo de la respuesta y que el reset lo limpia (excepción de TDD visual-UI, AGENTS.md) | Revertir `ChatWidget.tsx`, `ChatMessages.tsx`, `ReportBugButton.tsx`, `reportBugButton.logic.ts`, `documentCorpus.ts` (1 doc), el test de lógica |
+| 2 | Export canónico `MEETING_STATUSES` + consumo del enum en `searchMeetingsTool` + actualización del corpus 009/010 | PR-B (`feat/011-02-chat-knowledge-refresh`) | `bun test apps/__tests__/shared/domain/meeting-status.test.ts apps/__tests__/web/integrations/chat-tools-definitions.test.ts` | Manual: preguntarle al asistente "¿por qué mi reunión tiene error de transcripción?" y "¿cómo comparto una reunión?"; confirmar que las respuestas coinciden con la realidad de 009/010 (sin link público, transcription_error es recuperable) | Revertir `meetingStatus.ts`, `definitions.ts`, `documentCorpus.ts` (2 ediciones + 1 doc), `ChatMessages.tsx` (2 respuestas), los archivos de test nuevos |
 
 ---
 
-## Phase A1: Button placement wiring (PR-A)
+## Fase A1: Wiring de ubicación del botón (PR-A)
 
-> **Revised during implementation.** A1.1-A1.5 originally shipped an `onSupportTopic` callback +
-> `isSupport` flag + `useState` mechanism (as in the initial plan.md draft). The mandatory post-apply
-> bounded review (R3 Reliability) found that mechanism didn't survive `useChatStream`'s history restore on
-> reload — a real regression versus the pre-PR unconditional render. It was replaced with content-derived
-> visibility before merge; the callback/flag/data-field were deleted entirely. Checkboxes below describe
-> the actually-shipped mechanism.
+> **Revisado durante la implementación.** A1.1-A1.5 originalmente shippearon un callback `onSupportTopic`
+> + flag `isSupport` + mecanismo `useState` (como en el draft inicial de plan.md). La revisión acotada
+> obligatoria post-apply (R3 Reliability) encontró que ese mecanismo no sobrevivía la restauración de
+> historial de `useChatStream` al recargar — una regresión real respecto del renderizado incondicional
+> previo al PR. Se reemplazó por visibilidad derivada del contenido antes de mergear; el
+> callback/flag/campo-de-datos se eliminaron por completo. Los checkboxes de abajo describen el mecanismo
+> realmente shippeado.
 
-- [x] A1.1 New `apps/web/src/components/chat/chatWidget.logic.ts`: export `SUPPORT_TOPIC_MARKER = "Reportar un problema"` and `hasSupportTopicMarker(messages): boolean` (pure `.some()` over assistant-role messages containing the marker).
-- [x] A1.2 `ChatWidget.tsx`: `const showBugReport = hasSupportTopicMarker(messages) || manualReveal;` — no callback prop passed to `<ChatMessages>`, no `isSupport` field on `STARTER_TOPICS`.
-- [x] A1.3 `apps/__tests__/web/components/chat/chat-widget.logic.test.ts` (new, TDD-mandatory): 4 cases — empty list, restored assistant marker, user-role marker (role-gated false), assistant without marker.
-- [x] A1.4 `ChatWidget.tsx`: remove the unconditional `<ReportBugButton />` block; render it conditionally (`{showBugReport && (...)}`) directly below the messages area, before the error banner.
-- [x] A1.5 `ChatWidget.tsx`: `handleReset` calls `reset()`; derived visibility naturally resolves to hidden once `messages` is empty.
-- [x] A1.6 Manual verification (visual exception per AGENTS.md): starter state hides the button; Soporte click reveals it under the answer; a free-text-only thread never shows it; reset returns to starter topics with the button hidden; **a page reload with a Soporte-containing restored history shows the button again** (the regression this revision fixes). Verified via code trace across `ChatWidget.tsx`/`ChatMessages.tsx`/`useChatStream.ts`; recommend a quick human click-through before merge.
-- [x] A1.7 (added after R4 Resilience finding) `ChatWidget.tsx`: `manualReveal` state + a persistent "¿Necesitás reportar un problema?" link next to "Nueva conversación", shown when `messages.length > 0 && !showBugReport`; `handleReset` clears it. Closes the gap where a restored conversation without the marker had no button-reachable path except losing history via reset.
+- [x] A1.1 Nuevo `apps/web/src/components/chat/chatWidget.logic.ts`: exporta `SUPPORT_TOPIC_MARKER = "Reportar un problema"` y `hasSupportTopicMarker(messages): boolean` (`.some()` puro sobre mensajes con rol de asistente que contienen el marcador).
+- [x] A1.2 `ChatWidget.tsx`: `const showBugReport = hasSupportTopicMarker(messages) || manualReveal;` — sin prop de callback pasada a `<ChatMessages>`, sin campo `isSupport` en `STARTER_TOPICS`.
+- [x] A1.3 `apps/__tests__/web/components/chat/chat-widget.logic.test.ts` (nuevo, TDD-obligatorio): 4 casos — lista vacía, marcador restaurado en asistente, marcador en rol de usuario (falso por filtrado de rol), asistente sin marcador.
+- [x] A1.4 `ChatWidget.tsx`: eliminar el bloque incondicional `<ReportBugButton />`; renderizarlo condicionalmente (`{showBugReport && (...)}`) justo debajo del área de mensajes, antes del banner de error.
+- [x] A1.5 `ChatWidget.tsx`: `handleReset` llama a `reset()`; la visibilidad derivada resuelve naturalmente a oculta una vez que `messages` está vacío.
+- [x] A1.6 Verificación manual (excepción visual según AGENTS.md): el estado inicial oculta el botón; el click en Soporte lo revela debajo de la respuesta; un hilo de solo texto libre nunca lo muestra; el reset vuelve a los topics iniciales con el botón oculto; **una recarga de página con un historial restaurado que contiene Soporte muestra el botón de nuevo** (la regresión que corrige esta revisión). Verificado mediante trazado de código a través de `ChatWidget.tsx`/`ChatMessages.tsx`/`useChatStream.ts`; se recomienda un click-through humano rápido antes de mergear.
+- [x] A1.7 (agregado tras el hallazgo de R4 Resilience) `ChatWidget.tsx`: estado `manualReveal` + un link persistente "¿Necesitás reportar un problema?" junto a "Nueva conversación", mostrado cuando `messages.length > 0 && !showBugReport`; `handleReset` lo limpia. Cierra el gap donde una conversación restaurada sin el marcador no tenía ninguna vía para alcanzar el botón excepto perder el historial vía reset.
 
-## Phase A2: Spanish voseo copy (TDD-mandatory)
+## Fase A2: Copy en español voseo (TDD-obligatorio)
 
-- [x] A2.1 RED: update `apps/__tests__/web/components/report-bug-button.logic.test.ts` assertions to the Spanish voseo literals (e.g. `"This report has no meeting diagnostic log."` → `"Este reporte no incluye el diagnóstico de una reunión."`; `"Unable to submit bug report."` → `"No pudimos enviar el reporte."`). Run it — confirm it fails against current English strings.
-- [x] A2.2 GREEN: `reportBugButton.logic.ts` — translate all 3 strings (`getBugReportModeNote` fallback; `resolveBugReportFeedback` success `"Bug report submitted. Thank you."` → `"Reporte enviado. ¡Gracias!"`; error fallback). Re-run A2.1, confirm green.
-- [x] A2.3 `ReportBugButton.tsx`: translate the 6 UI strings — "Report a bug" → **"Reportar un problema"** (canonical); "Describe what happened..." → "Contanos qué pasó..."; aria-label "Bug report message" → "Mensaje del reporte"; "Submitting..." → "Enviando..."; "Submit report" → "Enviar reporte"; "Cancel" → "Cancelar". No test change (no logic test covers this file — visual exception).
+- [x] A2.1 RED: actualizar las afirmaciones de `apps/__tests__/web/components/report-bug-button.logic.test.ts` a los literales en voseo (ej. `"This report has no meeting diagnostic log."` → `"Este reporte no incluye el diagnóstico de una reunión."`; `"Unable to submit bug report."` → `"No pudimos enviar el reporte."`). Correrlo — confirmar que falla contra las strings en inglés actuales.
+- [x] A2.2 GREEN: `reportBugButton.logic.ts` — traducir las 3 strings (fallback de `getBugReportModeNote`; éxito de `resolveBugReportFeedback` `"Bug report submitted. Thank you."` → `"Reporte enviado. ¡Gracias!"`; fallback de error). Volver a correr A2.1, confirmar verde.
+- [x] A2.3 `ReportBugButton.tsx`: traducir las 6 strings de UI — "Report a bug" → **"Reportar un problema"** (canónico); "Describe what happened..." → "Contanos qué pasó..."; aria-label "Bug report message" → "Mensaje del reporte"; "Submitting..." → "Enviando..."; "Submit report" → "Enviar reporte"; "Cancel" → "Cancelar". Sin cambio de test (ningún test de lógica cubre este archivo — excepción visual).
 
-## Phase A3: Soporte answer + corpus line
+## Fase A3: Respuesta de Soporte + línea de corpus
 
-- [x] A3.1 `ChatMessages.tsx` STARTER_TOPICS Soporte `answer`: delete the "Próximamente" paragraph; replace with copy stating the "Reportar un problema" button (visible right below) sends the issue directly to the support channel now.
-- [x] A3.2 `documentCorpus.ts`: add one new doc `support-report-problem` (tags: soporte, reporte, problema, bug) — escalate via the Soporte topic → "Reportar un problema" → goes to the team's support channel; do NOT claim it's upcoming.
+- [x] A3.1 Respuesta de Soporte en STARTER_TOPICS de `ChatMessages.tsx`: eliminar el párrafo "Próximamente"; reemplazarlo con copy que afirme que el botón "Reportar un problema" (visible justo debajo) envía el problema directo al canal de soporte ahora.
+- [x] A3.2 `documentCorpus.ts`: agregar un doc nuevo `support-report-problem` (tags: soporte, reporte, problema, bug) — escalar vía el topic Soporte → "Reportar un problema" → va al canal de soporte del equipo; NO afirmar que está próximo.
 
-## Phase A4: Verification (PR-A)
+## Fase A4: Verificación (PR-A)
 
-- [x] A4.1 `bun test apps/__tests__` green; confirm no English literal remains in `reportBugButton.logic.ts`/`ReportBugButton.tsx`/its test.
+- [x] A4.1 `bun test apps/__tests__` en verde; confirmar que no queda ningún literal en inglés en `reportBugButton.logic.ts`/`ReportBugButton.tsx`/su test.
 - [x] A4.2 `bun run lint && bun run typecheck`.
-- [x] A4.3 Manual walkthrough per A1.6; confirm `git diff --stat dev` stays under 400 lines before opening PR-A.
+- [x] A4.3 Recorrido manual según A1.6; confirmar que `git diff --stat dev` se mantiene por debajo de 400 líneas antes de abrir el PR-A.
 
 ---
 
-## Phase B1: Canonical status list (TDD-mandatory)
+## Fase B1: Lista canónica de estados (TDD-obligatorio)
 
-- [ ] B1.1 RED: create `apps/__tests__/shared/domain/meeting-status.test.ts` asserting `MEETING_STATUSES` contains all 11 statuses incl. `"transcription_error"`, and `getMeetingStatusLabel` resolves a label for every array member. Run it — confirm it fails (`MEETING_STATUSES` doesn't exist yet).
-- [ ] B1.2 GREEN: `packages/shared/src/domain/meetingStatus.ts` — invert the source: `export const MEETING_STATUSES = [...] as const;` then `export type MeetingStatus = (typeof MEETING_STATUSES)[number];`, replacing the hand-written union. Re-run B1.1, confirm green; confirm `ALLOWED_TRANSITIONS`/`MEETING_STATUS_LABELS_ES` still typecheck as exhaustive `Record<MeetingStatus, ...>`.
+- [ ] B1.1 RED: crear `apps/__tests__/shared/domain/meeting-status.test.ts` afirmando que `MEETING_STATUSES` contiene los 11 estados incl. `"transcription_error"`, y que `getMeetingStatusLabel` resuelve un label para cada miembro del array. Correrlo — confirmar que falla (`MEETING_STATUSES` todavía no existe).
+- [ ] B1.2 GREEN: `packages/shared/src/domain/meetingStatus.ts` — invertir la fuente: `export const MEETING_STATUSES = [...] as const;` y luego `export type MeetingStatus = (typeof MEETING_STATUSES)[number];`, reemplazando la unión escrita a mano. Volver a correr B1.1, confirmar verde; confirmar que `ALLOWED_TRANSITIONS`/`MEETING_STATUS_LABELS_ES` siguen tipando como `Record<MeetingStatus, ...>` exhaustivos.
 
-## Phase B2: search_meetings enum consumption (TDD-mandatory)
+## Fase B2: Consumo del enum en search_meetings (TDD-obligatorio)
 
-- [ ] B2.1 RED: extend `apps/__tests__/web/integrations/chat-tools-definitions.test.ts` with a case asserting `searchMeetingsTool.parameters.properties.status.enum` equals `[...MEETING_STATUSES]` (import from `@meeting-bot/shared/domain/meetingStatus`). Run it — confirm it fails (current hardcoded array omits `transcription_error`).
-- [ ] B2.2 GREEN: `definitions.ts` — import `MEETING_STATUSES`; replace the hardcoded `status.enum` array with `enum: [...MEETING_STATUSES]`. Re-run B2.1, confirm green.
+- [ ] B2.1 RED: extender `apps/__tests__/web/integrations/chat-tools-definitions.test.ts` con un caso que afirme que `searchMeetingsTool.parameters.properties.status.enum` es igual a `[...MEETING_STATUSES]` (import desde `@meeting-bot/shared/domain/meetingStatus`). Correrlo — confirmar que falla (el array hardcodeado actual omite `transcription_error`).
+- [ ] B2.2 GREEN: `definitions.ts` — importar `MEETING_STATUSES`; reemplazar el array hardcodeado `status.enum` por `enum: [...MEETING_STATUSES]`. Volver a correr B2.1, confirmar verde.
 
-## Phase B3: Corpus/STARTER_TOPICS refresh (009/010 deltas only)
+## Fase B3: Actualización de corpus/STARTER_TOPICS (solo deltas de 009/010)
 
-- [ ] B3.1 `documentCorpus.ts` `meeting-lifecycle` doc: add `transcription_error` — recoverable, recording preserved, reprocesses from storage without rejoining.
-- [ ] B3.2 `documentCorpus.ts` `troubleshooting-transcription` doc: mention the `transcription_error` state and the reprocess/regenerate path.
-- [ ] B3.3 `documentCorpus.ts`: add new doc `meeting-access-sharing` (009 + ADR-0007) — "dar acceso"/"acceso" vocabulary (never "Access Grant"); "enlace de acceso restringido" por email as the only share type (no public links); per-attendee suggestions on calendar meetings; deactivated-owner lockout; co-attendees of auto-join meetings get access automatically.
-- [ ] B3.4 `ChatMessages.tsx` STARTER_TOPICS "Dashboard y reuniones" answer: replace "link público o restringido por email" with restricted-email-only wording; add `transcription_error` to the states list.
-- [ ] B3.5 `ChatMessages.tsx` STARTER_TOPICS "Cómo funciona el sistema" answer: add a `transcription_error` recovery note to the flow.
+- [ ] B3.1 Doc `meeting-lifecycle` de `documentCorpus.ts`: agregar `transcription_error` — recuperable, grabación conservada, se reprocesa desde el storage sin re-unirse.
+- [ ] B3.2 Doc `troubleshooting-transcription` de `documentCorpus.ts`: mencionar el estado `transcription_error` y el camino de reprocesamiento/regeneración.
+- [ ] B3.3 `documentCorpus.ts`: agregar doc nuevo `meeting-access-sharing` (009 + ADR-0007) — vocabulario "dar acceso"/"acceso" (nunca "Access Grant"); "enlace de acceso restringido" por email como único tipo de compartido (sin enlaces públicos); sugerencias por asistente en reuniones de calendario; bloqueo por owner desactivado; los co-asistentes de reuniones de auto-join reciben acceso automáticamente.
+- [ ] B3.4 Respuesta "Dashboard y reuniones" de STARTER_TOPICS en `ChatMessages.tsx`: reemplazar "link público o restringido por email" por la redacción de acceso exclusivamente por email restringido; agregar `transcription_error` a la lista de estados.
+- [ ] B3.5 Respuesta "Cómo funciona el sistema" de STARTER_TOPICS en `ChatMessages.tsx`: agregar una nota de recuperación de `transcription_error` al flujo.
 
-## Phase B4: Verification (PR-B)
+## Fase B4: Verificación (PR-B)
 
-- [ ] B4.1 `bun test apps/__tests__` green (new + updated test files).
+- [ ] B4.1 `bun test apps/__tests__` en verde (archivos de test nuevos + actualizados).
 - [ ] B4.2 `bun run lint && bun run typecheck`.
-- [ ] B4.3 Manual walkthrough: ask "¿cómo comparto una reunión?" (restricted-email only, no public link) and about `transcription_error` (recoverable explanation); confirm `git diff --stat dev` stays under 400 lines before opening PR-B.
+- [ ] B4.3 Recorrido manual: preguntar "¿cómo comparto una reunión?" (solo email restringido, sin link público) y sobre `transcription_error` (explicación de que es recuperable); confirmar que `git diff --stat dev` se mantiene por debajo de 400 líneas antes de abrir el PR-B.

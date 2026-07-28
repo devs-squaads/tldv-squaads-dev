@@ -41,6 +41,12 @@
   (`STORAGE_PROVIDER=s3`, `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_REGION`,
   `S3_ACCESS_KEY`, `S3_SECRET_KEY`). El web **firma las URLs de video con su propio entorno**: sin el
   bloque S3, la reproducción/descarga desde la web no funciona.
+- **Email (ADR-0004, feature 013)** — `EMAIL_PROVIDER=smtp` + `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/
+  `SMTP_PASS`/`SMTP_FROM` van en **Vercel** (proyecto `web`), no en Railway: `SmtpEmailProvider` vive
+  enteramente en `apps/web/src/integrations/email/providers/SmtpEmailProvider.ts` — el worker no lo
+  referencia en ningún punto. Si esta configuración falta o está incompleta con `NODE_ENV=production`,
+  `SmtpEmailProvider` **bloquea el envío lanzando un error explícito** en vez de degradar a log de consola
+  — deben quedar cargadas en Vercel antes de mergear a `main`/desplegar, no después.
 - **OAuth de Google** — el dominio nuevo requiere estas Authorized redirect URIs en Google Cloud Console:
   `https://tldv-squaads-dev.vercel.app/api/auth/callback/google` y
   `https://tldv-squaads-dev.vercel.app/api/settings/calendar-connect/callback`.
