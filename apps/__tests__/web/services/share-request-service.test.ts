@@ -1,4 +1,4 @@
-import { describe, expect, it, mock, beforeEach } from "bun:test";
+import { describe, expect, it, mock, beforeEach, spyOn } from "bun:test";
 
 type MeetingRow = { id: string; ownerId: string };
 type ShareRequestRow = {
@@ -33,6 +33,7 @@ const state: {
   shareCalls: { input: Record<string, unknown>; callerId?: string }[];
   shouldThrowOnGrant: boolean;
   shouldThrowOnShare: boolean;
+  attachFailureCount: number;
 } = {
   meetings: {},
   requests: {},
@@ -47,6 +48,7 @@ const state: {
   shareCalls: [],
   shouldThrowOnGrant: false,
   shouldThrowOnShare: false,
+  attachFailureCount: 0,
 };
 
 function resetState() {
@@ -63,6 +65,7 @@ function resetState() {
   state.shareCalls = [];
   state.shouldThrowOnGrant = false;
   state.shouldThrowOnShare = false;
+  state.attachFailureCount = 0;
 }
 
 const bunMock = mock as typeof mock & {
@@ -136,6 +139,10 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingShareRequestRepository",
     },
     attachResolutionRef: async (id: string, ref: Record<string, unknown>) => {
       state.attachCalls.push({ id, ref });
+      if (state.attachFailureCount > 0) {
+        state.attachFailureCount -= 1;
+        throw new Error("attachResolutionRef failed");
+      }
       const row = state.requests[id];
       if (row) {
         state.requests[id] = {
@@ -513,6 +520,56 @@ describe("ShareRequestService", () => {
       expect(state.revertToPendingCalls).toEqual(["request-1"]);
       expect(state.attachCalls).toHaveLength(0);
       expect(state.requests["request-1"]?.status).toBe("pending");
+    });
+
+    it("retries attachResolutionRef once and does not revert when creation already succeeded (registered path)", async () => {
+      seedPendingRequest();
+      state.attachFailureCount = 1;
+
+      await ShareRequestService.approveShareRequest(admin, "request-1");
+
+      expect(state.grantCalls).toHaveLength(1);
+      expect(state.attachCalls).toHaveLength(2);
+      expect(state.revertToPendingCalls).toHaveLength(0);
+      expect(state.requests["request-1"]?.status).toBe("approved");
+      expect(state.requests["request-1"]?.resolvedGrantId).toBe("grant-1");
+    });
+
+    it("retries attachResolutionRef once and does not revert when creation already succeeded (unregistered path)", async () => {
+      seedPendingRequest({
+        granteeUserId: null,
+        recipientEmail: "guest@example.com",
+        recipientEmailNormalized: "guest@example.com",
+        accessType: "permanent",
+      });
+      state.attachFailureCount = 1;
+
+      await ShareRequestService.approveShareRequest(admin, "request-1");
+
+      expect(state.shareCalls).toHaveLength(1);
+      expect(state.attachCalls).toHaveLength(2);
+      expect(state.revertToPendingCalls).toHaveLength(0);
+      expect(state.requests["request-1"]?.status).toBe("approved");
+      expect(state.requests["request-1"]?.resolvedShareId).toBe("share-1");
+    });
+
+    it("logs and resolves normally (does not revert or throw) when attachResolutionRef fails on both attempts", async () => {
+      seedPendingRequest();
+      state.attachFailureCount = 2;
+      const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(ShareRequestService.approveShareRequest(admin, "request-1")).resolves.toBeUndefined();
+
+      expect(state.grantCalls).toHaveLength(1);
+      expect(state.attachCalls).toHaveLength(2);
+      expect(state.revertToPendingCalls).toHaveLength(0);
+      // Approval already happened (grant exists); status stays "approved" even though the
+      // cosmetic backreference never got written.
+      expect(state.requests["request-1"]?.status).toBe("approved");
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]?.some((arg) => String(arg).includes("request-1"))).toBe(true);
+
+      errorSpy.mockRestore();
     });
 
     it("approves exactly as proposed — recipient and access type are not editable", async () => {

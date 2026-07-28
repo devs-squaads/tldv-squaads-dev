@@ -122,15 +122,18 @@ export class ShareRequestService {
 
     if (request.granteeUserId) {
       // The atomic gate already flipped status to "approved" above; if the downstream grant
-      // creation fails (deleted meeting, DB error, validation), that terminal status would
-      // otherwise be stuck forever (no re-approve, no cancel). Revert to "pending" so the
-      // request is retryable, then re-surface the original failure to the caller.
+      // creation itself fails (deleted meeting, DB error, validation), no grant exists yet, so
+      // that terminal status would otherwise be stuck forever (no re-approve, no cancel). Revert
+      // to "pending" so the request is retryable, then re-surface the original failure to the
+      // caller. This guard covers ONLY the creation call — see attachResolutionRefWithRetry's
+      // comment for why a failed backreference after a successful grant must NOT revert.
+      let grant: Awaited<ReturnType<typeof MeetingAccessGrantService.createGrant>>;
       try {
         // 013/Phase 4.2: accessType + expiresInDays are passed through additively (alongside the
         // legacy ttl spread below) so createGrant's own accessType mapping bypasses shareTtl.ts's
         // fixed TTL menu for arbitrary day counts — closes the gap flagged when this branch only
         // had ttlMinutes/noExpiry to work with (PR2).
-        const grant = await MeetingAccessGrantService.createGrant({
+        grant = await MeetingAccessGrantService.createGrant({
           callerId: request.requesterId,
           meetingId: request.meetingId,
           granteeUserId: request.granteeUserId,
@@ -138,13 +141,13 @@ export class ShareRequestService {
           expiresInDays: request.expiresInDays ?? undefined,
           ...ttl,
         });
-        // Status is already terminal at this point (only the winning caller gets here), so this
-        // follow-up write is a plain by-id update, not another race.
-        await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedGrantId: grant.id });
       } catch (err) {
         await MeetingShareRequestRepository.revertToPending(requestId);
         throw err;
       }
+      // Status is already terminal at this point (only the winning caller gets here), so this
+      // follow-up write is a plain by-id update, not another race.
+      await this.attachResolutionRefWithRetry(requestId, { resolvedGrantId: grant.id });
       return;
     }
 
@@ -167,13 +170,46 @@ export class ShareRequestService {
       expiresInDays: request.expiresInDays ?? undefined,
       ...ttl,
     };
-    // Same revert-on-failure rationale as the registered-recipient branch above.
+    // Same revert-on-failure rationale as the registered-recipient branch above: only the
+    // creation call itself is guarded — once createShare succeeds (and, for this path, its email
+    // has already gone out), a failed backreference alone must NOT revert to "pending".
+    let share: Awaited<ReturnType<typeof MeetingShareService.createShare>>;
     try {
-      const share = await MeetingShareService.createShare(shareInput, request.requesterId);
-      await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedShareId: share.id });
+      share = await MeetingShareService.createShare(shareInput, request.requesterId);
     } catch (err) {
       await MeetingShareRequestRepository.revertToPending(requestId);
       throw err;
+    }
+    await this.attachResolutionRefWithRetry(requestId, { resolvedShareId: share.id });
+  }
+
+  /**
+   * Best-effort backreference write, called ONLY after the downstream Access Grant or share (and,
+   * for the unregistered-recipient path, its email) already exists. Reverting the request to
+   * "pending" on a failure here — the way the creation-call guards above do — would reopen the
+   * exact duplicate-creation risk those guards exist to prevent: a retried/re-approved request
+   * would create a SECOND grant, or (worse, since createShare/email has no dedup constraint) send
+   * a duplicate share + email. So this never reverts and never throws: one inline retry absorbs a
+   * likely-transient failure, and if both attempts fail we just log for manual reconciliation and
+   * let approveShareRequest return normally — from the caller's perspective the approval already
+   * succeeded, because it did; only the cosmetic backreference is missing.
+   */
+  private static async attachResolutionRefWithRetry(
+    requestId: string,
+    ref: { resolvedGrantId?: string | null; resolvedShareId?: string | null }
+  ): Promise<void> {
+    try {
+      await MeetingShareRequestRepository.attachResolutionRef(requestId, ref);
+    } catch {
+      try {
+        await MeetingShareRequestRepository.attachResolutionRef(requestId, ref);
+      } catch (err) {
+        console.error(
+          `[ShareRequestService] Failed to attach resolution reference after retry for request ${requestId}`,
+          ref,
+          err
+        );
+      }
     }
   }
 
