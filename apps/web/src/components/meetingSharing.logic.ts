@@ -74,3 +74,20 @@ export function canCancelShareRequest(
 ): boolean {
   return request.status === "pending" && Boolean(callerId) && request.requesterId === callerId;
 }
+
+export type ShareAccessTypeLabel =
+  | { kind: "single_use"; label: string }
+  | { kind: "permanent"; label: string }
+  | { kind: "temporary"; label: string; expiresAt: Date };
+
+/**
+ * Derives the "Enlaces de acceso restringido" access-type badge from fields the share row
+ * already carries — no new data needed (human feedback: rows showed no access-type info at a
+ * glance). single_use always wins (a single-use link is never "permanent" even though it also
+ * has no expiresAt); temporary carries its expiresAt for the caller to format/display.
+ */
+export function resolveShareAccessTypeLabel(share: { singleUse: boolean; expiresAt: Date | null }): ShareAccessTypeLabel {
+  if (share.singleUse) return { kind: "single_use", label: "Único uso" };
+  if (share.expiresAt === null) return { kind: "permanent", label: "Permanente" };
+  return { kind: "temporary", label: "Temporal", expiresAt: share.expiresAt };
+}

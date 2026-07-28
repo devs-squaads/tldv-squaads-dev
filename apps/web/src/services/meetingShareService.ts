@@ -234,6 +234,7 @@ export class MeetingShareService {
       recipientEmail,
       expiresAt,
       shareUrl,
+      singleUse: input.singleUse ?? false,
     };
   }
 
@@ -252,6 +253,7 @@ export class MeetingShareService {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       isActive: isShareActive(record.expiresAt, record.revokedAt, now),
+      singleUse: record.singleUse,
     }));
   }
 

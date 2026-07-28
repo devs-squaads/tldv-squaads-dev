@@ -30,6 +30,9 @@ export interface ShareListItem {
   createdAt: Date;
   updatedAt: Date;
   isActive: boolean;
+  // 013: surfaced so the UI can show an access-type badge (single-use/temporary/permanent)
+  // without re-deriving it — the DB row already carries this (ADR-0008).
+  singleUse: boolean;
 }
 
 export interface RenewShareInput {
@@ -44,6 +47,7 @@ export interface ShareCreationResult {
   recipientEmail: string | null;
   expiresAt: Date | null;
   shareUrl: string;
+  singleUse: boolean;
 }
 
 export type PublicShareResolveResult =

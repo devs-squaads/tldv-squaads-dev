@@ -8,7 +8,10 @@ import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { MeetingShareService } from "@/services/meetingShareService";
 import { MeetingAccessGrantService } from "@/services/meetingAccessGrantService";
 import { ShareRequestService } from "@/services/shareRequestService";
+import type { ShareRequestRecord } from "@/services/shareRequestService";
 import { ParticipantSuggestionService } from "@/services/participantSuggestionService";
+import { UserRepository } from "@meeting-bot/shared/repositories/UserRepository";
+import type { MeetingAccessGrantRecord } from "@meeting-bot/shared/repositories/MeetingAccessGrantRepository";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlassCursor } from "@/components/GlassLayout";
 import VenomBeam from "@/components/ui/venom-beam";
@@ -42,12 +45,31 @@ export default async function MeetingPage({
   // WebMeetingRepository.findByIdForUser's visibleToUser rule), so they get empty lists instead
   // of a page-crashing ownership error.
   const isOwner = meeting.ownerId === session.user.id;
-  const [initialGrants, initialShareRequests] = isOwner
+  const [grants, shareRequests]: [MeetingAccessGrantRecord[], ShareRequestRecord[]] = isOwner
     ? await Promise.all([
         MeetingAccessGrantService.listGrantsByMeetingId(session.user.id, id),
         ShareRequestService.listByMeetingId(session.user.id, id),
       ])
     : [[], []];
+
+  // 013 human feedback: "Solicitudes y accesos" showed raw ids like "Usuario 106929991040359390199"
+  // instead of the person's email. Batch-resolve every referenced granteeUserId in one query
+  // (depends on the grants/requests fetched above, so it can't join the Promise.all itself —
+  // but it's still a single extra round-trip instead of one lookup per row).
+  const granteeUserIds = Array.from(
+    new Set([
+      ...grants.map((grant) => grant.granteeUserId),
+      ...shareRequests.flatMap((request) => (request.granteeUserId ? [request.granteeUserId] : [])),
+    ]),
+  );
+  const granteeUsers = await UserRepository.findByIds(granteeUserIds);
+  const emailByUserId = new Map(granteeUsers.map((user) => [user.id, user.email]));
+
+  const initialGrants = grants.map((grant) => ({ ...grant, granteeEmail: emailByUserId.get(grant.granteeUserId) }));
+  const initialShareRequests = shareRequests.map((request) => ({
+    ...request,
+    granteeEmail: request.granteeUserId ? emailByUserId.get(request.granteeUserId) : undefined,
+  }));
   // Try to generate fresh signed URLs for the recording — inline for the <video> player,
   // attachment for the download link (a single attachment-disposition URL can't do both;
   // browsers refuse to play a <video> whose response forces a download).

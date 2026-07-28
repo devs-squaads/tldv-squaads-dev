@@ -6,6 +6,7 @@ import {
   canCancelShareRequest,
   getAvailableAccessTypes,
   resolveRecipients,
+  resolveShareAccessTypeLabel,
   validateAccessTypeSelection,
 } from "../../../web/src/components/meetingSharing.logic";
 
@@ -139,5 +140,38 @@ describe("canCancelShareRequest — only the author may cancel their own pending
 
   it("rejects when no caller is known (unauthenticated on client)", () => {
     expect(canCancelShareRequest({ status: "pending", requesterId: "member-1" }, undefined)).toBe(false);
+  });
+});
+
+describe("resolveShareAccessTypeLabel — access-type badge for restricted shares", () => {
+  it("labels a single-use share as 'Único uso' even without an expiresAt", () => {
+    expect(resolveShareAccessTypeLabel({ singleUse: true, expiresAt: null })).toEqual({
+      kind: "single_use",
+      label: "Único uso",
+    });
+  });
+
+  it("single_use wins over a set expiresAt (defensive — single_use never carries one in practice)", () => {
+    const expiresAt = new Date("2026-01-01T00:00:00Z");
+    expect(resolveShareAccessTypeLabel({ singleUse: true, expiresAt })).toEqual({
+      kind: "single_use",
+      label: "Único uso",
+    });
+  });
+
+  it("labels a non-single-use share with no expiresAt as 'Permanente'", () => {
+    expect(resolveShareAccessTypeLabel({ singleUse: false, expiresAt: null })).toEqual({
+      kind: "permanent",
+      label: "Permanente",
+    });
+  });
+
+  it("labels a non-single-use share with an expiresAt as 'Temporal', carrying the date", () => {
+    const expiresAt = new Date("2026-02-01T00:00:00Z");
+    expect(resolveShareAccessTypeLabel({ singleUse: false, expiresAt })).toEqual({
+      kind: "temporary",
+      label: "Temporal",
+      expiresAt,
+    });
   });
 });

@@ -27,6 +27,7 @@ import {
   canCancelShareRequest,
   getAvailableAccessTypes,
   resolveRecipients,
+  resolveShareAccessTypeLabel,
   validateAccessTypeSelection,
   type RecipientMode,
 } from "./meetingSharing.logic";
@@ -63,6 +64,7 @@ interface MeetingShare {
   createdAt: Date;
   updatedAt: Date;
   isActive: boolean;
+  singleUse: boolean;
 }
 
 /** Calendar-sourced participant suggestion (spec R6) — resolved server-side by ParticipantSuggestionService.
@@ -77,10 +79,15 @@ interface ParticipantSuggestion {
 interface MeetingGrant {
   id: string;
   granteeUserId: string;
+  /** Batch-resolved server-side (page.tsx) from `granteeUserId`; absent if the user got deleted. */
+  granteeEmail?: string;
   expiresAt: Date | null;
   revokedAt: Date | null;
   createdAt: Date;
 }
+
+/** `ShareRequestRecord` plus the batch-resolved grantee email (page.tsx) for the registered-recipient path. */
+type ShareRequestWithEmail = ShareRequestRecord & { granteeEmail?: string };
 
 const accessTypeLabels: Record<ShareRequestAccessType, string> = {
   single_use: "un solo uso",
@@ -125,7 +132,7 @@ export function MeetingDetailsView({
   participantSuggestions: ParticipantSuggestion[];
   /** Empty for a non-owner viewer (own Access Grant) — the section below is Owner-only data. */
   initialGrants: MeetingGrant[];
-  initialShareRequests: ShareRequestRecord[];
+  initialShareRequests: ShareRequestWithEmail[];
 }) {
   const configuredTtlOptions = ttlOptionsMinutes.length > 0 ? ttlOptionsMinutes : [60];
   const defaultTtlMinutes = configuredTtlOptions[0];
@@ -135,7 +142,7 @@ export function MeetingDetailsView({
   const [meeting, setMeeting] = useState<Meeting>(initialMeeting);
   const [shares, setShares] = useState<MeetingShare[]>(initialShares);
   const [grants, setGrants] = useState<MeetingGrant[]>(initialGrants);
-  const [shareRequests, setShareRequests] = useState<ShareRequestRecord[]>(initialShareRequests);
+  const [shareRequests, setShareRequests] = useState<ShareRequestWithEmail[]>(initialShareRequests);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
@@ -296,7 +303,7 @@ export function MeetingDetailsView({
               continue;
             }
             if ("shareRequest" in result && result.shareRequest) {
-              setShareRequests((prev) => [result.shareRequest, ...prev]);
+              setShareRequests((prev) => [{ ...result.shareRequest, granteeEmail: recipient.email }, ...prev]);
               setParticipantActionState((prev) => ({ ...prev, [recipient.email]: "pending" }));
             } else if ("grant" in result && result.grant) {
               const now = new Date();
@@ -304,6 +311,7 @@ export function MeetingDetailsView({
                 {
                   id: result.grant.id,
                   granteeUserId: recipient.granteeUserId as string,
+                  granteeEmail: recipient.email,
                   expiresAt: result.grant.expiresAt,
                   revokedAt: null,
                   createdAt: now,
@@ -344,6 +352,7 @@ export function MeetingDetailsView({
                 createdAt: now,
                 updatedAt: now,
                 isActive: true,
+                singleUse: result.share.singleUse,
               };
               setShares((prev) => [newShare, ...prev]);
               setLatestShareUrl(result.share.shareUrl);
@@ -701,7 +710,15 @@ export function MeetingDetailsView({
     Boolean(grant.revokedAt) || (grant.expiresAt !== null && grant.expiresAt.getTime() <= Date.now());
   const inactiveGrantsCount = grants.filter(isInactiveGrant).length;
 
-  const renderShareRow = (share: MeetingShare) => (
+  // 013 human feedback: "Enlaces de acceso restringido" showed no access-type info — an admin
+  // couldn't tell at a glance whether a link was permanent, temporary, or single-use. Derived
+  // purely from fields the row already carries (meetingSharing.logic.ts), no new data needed.
+  const renderShareRow = (share: MeetingShare) => {
+    const accessLabel = resolveShareAccessTypeLabel(share);
+    const accessTypeText =
+      accessLabel.kind === "temporary" ? `${accessLabel.label} · ${formatDate(accessLabel.expiresAt)}` : accessLabel.label;
+
+    return (
     <div key={share.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -716,6 +733,7 @@ export function MeetingDetailsView({
           >
             {share.status === "active" ? "activo" : share.status === "expired" ? "caducado" : "revocado"}
           </Badge>
+          <Badge variant="secondary">{accessTypeText}</Badge>
         </div>
         <div className="flex items-center gap-2">
           {share.status === "active" && (
@@ -797,7 +815,8 @@ export function MeetingDetailsView({
         <span className="sm:text-right">{`Creado: ${formatDate(share.createdAt)}`}</span>
       </div>
     </div>
-  );
+    );
+  };
 
   const shareRequestStatusVariant = (status: ShareRequestRecord["status"]) => {
     if (status === "approved") return "success" as const;
@@ -809,11 +828,11 @@ export function MeetingDetailsView({
   // 013 "Solicitudes y accesos": all-statuses Share Request row — the registered-recipient
   // passive-discovery surface (spec: "Silent rejection with passive discovery"). The requester
   // may cancel their own still-pending request; nobody else gets that action.
-  const renderShareRequestRow = (request: ShareRequestRecord) => (
+  const renderShareRequestRow = (request: ShareRequestWithEmail) => (
     <div key={request.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 space-y-1">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm">
-          {request.granteeUserId ? `Usuario ${request.granteeUserId}` : request.recipientEmail}
+          {request.granteeUserId ? (request.granteeEmail ?? `Usuario ${request.granteeUserId}`) : request.recipientEmail}
         </span>
         <div className="flex items-center gap-2">
           <Badge variant={shareRequestStatusVariant(request.status)}>{shareRequestStatusLabels[request.status]}</Badge>
@@ -860,7 +879,7 @@ export function MeetingDetailsView({
     return (
       <div key={grant.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 space-y-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-sm">Usuario {grant.granteeUserId}</span>
+          <span className="text-sm">{grant.granteeEmail ?? `Usuario ${grant.granteeUserId}`}</span>
           <div className="flex items-center gap-2">
             <Badge variant={statusLabel === "activo" ? "success" : statusLabel === "caducado" ? "warning" : "destructive"}>
               {statusLabel}

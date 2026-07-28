@@ -15,6 +15,10 @@ const bunMock = mock as typeof mock & {
 bunMock.module("@meeting-bot/shared/repositories/UserRepository", () => ({
   UserRepository: {
     findByEmail: async (email: string) => state.usersByEmail[email.toLowerCase()] ?? null,
+    // Stubbed to keep this process-wide mock.module() registration (first-registration-wins,
+    // see apps/__tests__/shared/repositories/user-repository.test.ts) satisfying the real
+    // UserRepository interface for any other test file that transitively depends on it.
+    findByIds: async () => [],
   },
 }));
 
