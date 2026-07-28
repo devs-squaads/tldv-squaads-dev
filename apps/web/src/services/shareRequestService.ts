@@ -121,21 +121,30 @@ export class ShareRequestService {
     }
 
     if (request.granteeUserId) {
-      // 013/Phase 4.2: accessType + expiresInDays are passed through additively (alongside the
-      // legacy ttl spread below) so createGrant's own accessType mapping bypasses shareTtl.ts's
-      // fixed TTL menu for arbitrary day counts — closes the gap flagged when this branch only
-      // had ttlMinutes/noExpiry to work with (PR2).
-      const grant = await MeetingAccessGrantService.createGrant({
-        callerId: request.requesterId,
-        meetingId: request.meetingId,
-        granteeUserId: request.granteeUserId,
-        accessType: request.accessType,
-        expiresInDays: request.expiresInDays ?? undefined,
-        ...ttl,
-      });
-      // Status is already terminal at this point (only the winning caller gets here), so this
-      // follow-up write is a plain by-id update, not another race.
-      await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedGrantId: grant.id });
+      // The atomic gate already flipped status to "approved" above; if the downstream grant
+      // creation fails (deleted meeting, DB error, validation), that terminal status would
+      // otherwise be stuck forever (no re-approve, no cancel). Revert to "pending" so the
+      // request is retryable, then re-surface the original failure to the caller.
+      try {
+        // 013/Phase 4.2: accessType + expiresInDays are passed through additively (alongside the
+        // legacy ttl spread below) so createGrant's own accessType mapping bypasses shareTtl.ts's
+        // fixed TTL menu for arbitrary day counts — closes the gap flagged when this branch only
+        // had ttlMinutes/noExpiry to work with (PR2).
+        const grant = await MeetingAccessGrantService.createGrant({
+          callerId: request.requesterId,
+          meetingId: request.meetingId,
+          granteeUserId: request.granteeUserId,
+          accessType: request.accessType,
+          expiresInDays: request.expiresInDays ?? undefined,
+          ...ttl,
+        });
+        // Status is already terminal at this point (only the winning caller gets here), so this
+        // follow-up write is a plain by-id update, not another race.
+        await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedGrantId: grant.id });
+      } catch (err) {
+        await MeetingShareRequestRepository.revertToPending(requestId);
+        throw err;
+      }
       return;
     }
 
@@ -158,8 +167,14 @@ export class ShareRequestService {
       expiresInDays: request.expiresInDays ?? undefined,
       ...ttl,
     };
-    const share = await MeetingShareService.createShare(shareInput, request.requesterId);
-    await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedShareId: share.id });
+    // Same revert-on-failure rationale as the registered-recipient branch above.
+    try {
+      const share = await MeetingShareService.createShare(shareInput, request.requesterId);
+      await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedShareId: share.id });
+    } catch (err) {
+      await MeetingShareRequestRepository.revertToPending(requestId);
+      throw err;
+    }
   }
 
   static async rejectShareRequest(caller: SessionCaller, requestId: string): Promise<void> {

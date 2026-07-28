@@ -104,6 +104,24 @@ export class MeetingShareRequestRepository {
       .where(eq(meetingShareRequests.id, id));
   }
 
+  /**
+   * Rollback for a downstream failure AFTER `resolve()` already flipped the request to a
+   * terminal status: puts it back to "pending" so it becomes retryable (re-approvable or
+   * cancellable) instead of stuck forever. No status guard needed — only the single winning
+   * caller from the atomic `resolve()` gate ever reaches this, so there's no race on the revert.
+   */
+  static async revertToPending(id: string): Promise<void> {
+    await db
+      .update(meetingShareRequests)
+      .set({
+        status: "pending",
+        resolvedBy: null,
+        resolvedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(meetingShareRequests.id, id));
+  }
+
   static async deleteById(id: string): Promise<void> {
     await db.delete(meetingShareRequests).where(eq(meetingShareRequests.id, id));
   }

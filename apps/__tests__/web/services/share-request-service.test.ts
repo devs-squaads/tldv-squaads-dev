@@ -26,10 +26,13 @@ const state: {
   resolveCalls: { id: string; input: Record<string, unknown> }[];
   cancelCalls: string[];
   attachCalls: { id: string; ref: Record<string, unknown> }[];
+  revertToPendingCalls: string[];
   deleteCalls: string[];
   deleteResolvedCalls: string[];
   grantCalls: Record<string, unknown>[];
   shareCalls: { input: Record<string, unknown>; callerId?: string }[];
+  shouldThrowOnGrant: boolean;
+  shouldThrowOnShare: boolean;
 } = {
   meetings: {},
   requests: {},
@@ -37,10 +40,13 @@ const state: {
   resolveCalls: [],
   cancelCalls: [],
   attachCalls: [],
+  revertToPendingCalls: [],
   deleteCalls: [],
   deleteResolvedCalls: [],
   grantCalls: [],
   shareCalls: [],
+  shouldThrowOnGrant: false,
+  shouldThrowOnShare: false,
 };
 
 function resetState() {
@@ -50,10 +56,13 @@ function resetState() {
   state.resolveCalls = [];
   state.cancelCalls = [];
   state.attachCalls = [];
+  state.revertToPendingCalls = [];
   state.deleteCalls = [];
   state.deleteResolvedCalls = [];
   state.grantCalls = [];
   state.shareCalls = [];
+  state.shouldThrowOnGrant = false;
+  state.shouldThrowOnShare = false;
 }
 
 const bunMock = mock as typeof mock & {
@@ -118,6 +127,13 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingShareRequestRepository",
       state.requests[id] = updated;
       return updated;
     },
+    revertToPending: async (id: string) => {
+      state.revertToPendingCalls.push(id);
+      const row = state.requests[id];
+      if (row) {
+        state.requests[id] = { ...row, status: "pending", resolvedBy: null, resolvedAt: null };
+      }
+    },
     attachResolutionRef: async (id: string, ref: Record<string, unknown>) => {
       state.attachCalls.push({ id, ref });
       const row = state.requests[id];
@@ -148,6 +164,9 @@ bunMock.module("@/services/meetingAccessGrantService", () => ({
   MeetingAccessGrantService: {
     createGrant: async (input: Record<string, unknown>) => {
       state.grantCalls.push(input);
+      if (state.shouldThrowOnGrant) {
+        throw new Error("createGrant failed");
+      }
       return { id: "grant-1", expiresAt: input.noExpiry ? null : new Date() };
     },
   },
@@ -157,6 +176,9 @@ bunMock.module("@/services/meetingShareService", () => ({
   MeetingShareService: {
     createShare: async (input: Record<string, unknown>, callerId?: string) => {
       state.shareCalls.push({ input, callerId });
+      if (state.shouldThrowOnShare) {
+        throw new Error("createShare failed");
+      }
       return {
         id: "share-1",
         shareType: "restricted_email",
@@ -458,6 +480,39 @@ describe("ShareRequestService", () => {
 
       expect(state.shareCalls).toHaveLength(0);
       expect(state.attachCalls).toHaveLength(0);
+    });
+
+    it("reverts to pending and re-throws when createGrant fails (registered path)", async () => {
+      seedPendingRequest();
+      state.shouldThrowOnGrant = true;
+
+      await expect(ShareRequestService.approveShareRequest(admin, "request-1")).rejects.toThrow(
+        "createGrant failed"
+      );
+
+      expect(state.revertToPendingCalls).toEqual(["request-1"]);
+      expect(state.attachCalls).toHaveLength(0);
+      expect(state.requests["request-1"]?.status).toBe("pending");
+      expect(state.requests["request-1"]?.resolvedBy).toBeNull();
+      expect(state.requests["request-1"]?.resolvedAt).toBeNull();
+    });
+
+    it("reverts to pending and re-throws when createShare fails (unregistered path)", async () => {
+      seedPendingRequest({
+        granteeUserId: null,
+        recipientEmail: "guest@example.com",
+        recipientEmailNormalized: "guest@example.com",
+        accessType: "permanent",
+      });
+      state.shouldThrowOnShare = true;
+
+      await expect(ShareRequestService.approveShareRequest(admin, "request-1")).rejects.toThrow(
+        "createShare failed"
+      );
+
+      expect(state.revertToPendingCalls).toEqual(["request-1"]);
+      expect(state.attachCalls).toHaveLength(0);
+      expect(state.requests["request-1"]?.status).toBe("pending");
     });
 
     it("approves exactly as proposed — recipient and access type are not editable", async () => {
