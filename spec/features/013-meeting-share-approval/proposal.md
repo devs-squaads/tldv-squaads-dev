@@ -1,119 +1,136 @@
-# Proposal: Member-Share Admin Approval + Real SMTP Email Provider
+# Propuesta: Aprobación de Admin para Compartidos de Member + Proveedor SMTP de Email Real
 
-Source ADRs: `docs/adr/0004-smtp-email-provider.md`, `docs/adr/0008-member-share-admin-approval.md`.
-Ground truth for current state: `spec/features/013-meeting-share-approval/explore.md` (cited below as
-`explore.md`). Vocabulary is canonical per `docs/CONTEXT.md` ("Meeting Ownership & Sharing"): `Owner`,
-`Access Grant`, `Participant`, `Auto-Join Co-Attendee Grant`, `Share Request`.
+ADRs fuente: `docs/adr/0004-smtp-email-provider.md`, `docs/adr/0008-member-share-admin-approval.md`.
+Fuente de verdad del estado actual: `spec/features/013-meeting-share-approval/explore.md` (citado abajo
+como `explore.md`). El vocabulario es canónico según `docs/CONTEXT.md` ("Meeting Ownership & Sharing"):
+`Owner`, `Access Grant`, `Participant`, `Auto-Join Co-Attendee Grant`, `Share Request`.
 
-## Intent
+## Intención
 
-Two accepted ADRs, one delivery:
+Dos ADRs aceptadas, una sola entrega:
 
-- **Email gap (ADR-0004)**: since feature 009, every "sent" email is a console log —
-  `ConsoleEmailProvider` is the only implementation. Share links and OTP codes never reach an inbox; the
-  Owner copies links by hand. This blocks the existing `restricted_email` flow AND any approval flow from
-  notifying anyone.
-- **Oversight gap (ADR-0008)**: the business now requires that a `member`-role Owner cannot finalize
-  outbound sharing alone. They propose; a platform `admin` approves or rejects. This **partially reverses
-  ADR-0005 decision #5** ("only the Owner, no exceptions"): sharing authority now branches on
-  `authorized_accounts.role`. An `admin` Owner keeps sharing directly, unchanged.
+- **Gap de email (ADR-0004)**: desde la feature 009, cada email "enviado" es en realidad un console log —
+  `ConsoleEmailProvider` es la única implementación. Los links de compartido y los códigos OTP nunca
+  llegan a una bandeja de entrada; el Owner copia los links a mano. Esto bloquea tanto el flujo
+  `restricted_email` existente COMO cualquier flujo de aprobación que necesite notificar a alguien.
+- **Gap de supervisión (ADR-0008)**: el negocio ahora exige que un Owner con rol `member` no pueda
+  finalizar el compartido saliente por su cuenta. Propone; un `admin` de la plataforma aprueba o rechaza.
+  Esto **revierte parcialmente la decisión #5 de ADR-0005** ("solo el Owner, sin excepciones"): la
+  autoridad de compartido ahora se bifurca según `authorized_accounts.role`. Un Owner `admin` sigue
+  compartiendo directamente, sin cambios.
 
-## Scope
+## Alcance
 
-### In Scope
-- **Recipient-selection modes (3)**: share with all `Participant`s / choose among `Participant`s / add an
-  email not in the meeting. "Share with all" is genuinely new UI — the current card is deliberately
-  per-recipient (`MeetingDetailsView.tsx:221-222`, per explore.md).
-- **Access types (3)**: `single_use` (unregistered recipients only; dies on first successful OTP
-  `verifyAccess()`), `temporary` (member picks the day count freely at request time, 15 pre-filled as
-  default — not fixed), `permanent` (default for `Participant`s). Registered recipients never get
-  `single_use` — `Access Grant` has no one-time-access event.
-- **`Share Request` lifecycle**: pending → approved | rejected | cancelled. One request per recipient,
-  never bundled. The `member` who created a pending request may cancel it themselves. Approval creates the
-  exact downstream row ADR-0005 defined (`Access Grant` or `meeting_shares`) and triggers the real email;
-  rejection creates nothing.
-- **Platform-wide approval authority**: any `admin`, regardless of meeting attendance. Admins approve or
-  reject a `Share Request` exactly as the member proposed it (recipient, access type, day count) — admins
-  do not edit a pending request's contents.
-- **Admin notification surface**: navbar bell + dedicated pending-requests page. Unread count = global
-  pending-request count; no per-admin read-tracking.
-- **`SmtpEmailProvider`** (Nodemailer) via the existing `EmailProviderFactory`. Console fallback on
-  missing config in local/dev; **production fails loudly and blocks the send** on missing SMTP config —
-  never a silent console-only "email" once deployed. Both this feature and the pre-existing
-  `restricted_email` flow depend on it.
+### Dentro del Alcance
+- **Modos de selección de destinatario (3)**: compartir con todos los `Participant`s / elegir entre
+  `Participant`s / agregar un email que no está en la reunión. "Compartir con todos" es UI genuinamente
+  nueva — la card actual es deliberadamente por-destinatario (`MeetingDetailsView.tsx:221-222`, según
+  explore.md).
+- **Tipos de acceso (3)**: `single_use` (solo destinatarios no registrados; muere en la primera
+  verificación OTP `verifyAccess()` exitosa), `temporary` (el member elige libremente la cantidad de días
+  al momento del request, con 15 precargado como valor por defecto — no fijo), `permanent` (por defecto
+  para `Participant`s). Los destinatarios registrados nunca reciben `single_use` — `Access Grant` no
+  tiene ningún evento de acceso de una sola vez.
+- **Ciclo de vida del `Share Request`**: pending → approved | rejected | cancelled. Un request por
+  destinatario, nunca agrupado. El `member` que creó un request pendiente puede cancelarlo él mismo. La
+  aprobación crea exactamente la fila subsiguiente que definió ADR-0005 (`Access Grant` o
+  `meeting_shares`) y dispara el email real; el rechazo no crea nada.
+- **Autoridad de aprobación a nivel de plataforma**: cualquier `admin`, sin importar su asistencia a la
+  reunión. Los admins aprueban o rechazan un `Share Request` exactamente como lo propuso el member
+  (destinatario, tipo de acceso, cantidad de días) — los admins no editan el contenido de un request
+  pendiente.
+- **Superficie de notificación para admin**: campanita en el navbar + página dedicada de requests
+  pendientes. Cuenta de no-leídos = cuenta global de requests pendientes; sin tracking de lectura por
+  admin.
+- **`SmtpEmailProvider`** (Nodemailer) vía el `EmailProviderFactory` existente. Fallback a console cuando
+  falta configuración en local/dev; **producción falla de forma ruidosa y bloquea el envío** cuando falta
+  configuración SMTP — nunca un "email" silencioso solo de console una vez desplegado. Tanto esta feature
+  como el flujo `restricted_email` preexistente dependen de esto.
 
-### Out of Scope (deliberately rejected during grill — do not reintroduce)
-- Any change to the `Owner`-assignment race/dedup from feature 010/ADR-0007 (`meetings(source_provider,
-  source_event_id)` unique insert) — untouched.
-- Per-admin notification read-state ("seen by X") — unread = pending, same for every admin.
-- Active/pushed rejection notice to the `member` — passive discovery only, via the existing share list.
-- Editing/resubmitting a rejected `Share Request` — the member creates a fresh one.
-- Admin editing a pending `Share Request`'s contents before approving — approve/reject as-proposed only.
-- `single_use` access for registered recipients.
-- Email template authoring beyond populating existing `SendEmailInput.text`/`html`.
+### Fuera del Alcance (rechazado deliberadamente durante el grill — no reintroducir)
+- Cualquier cambio a la carrera de asignación/dedup de `Owner` de la feature 010/ADR-0007 (inserción
+  única de `meetings(source_provider, source_event_id)`) — intacto.
+- Estado de lectura de notificación por admin ("visto por X") — no-leído = pending, igual para todos los
+  admins.
+- Aviso de rechazo activo/push al `member` — solo descubrimiento pasivo, vía la lista de compartidos
+  existente.
+- Editar/reenviar un `Share Request` rechazado — el member crea uno nuevo.
+- Que el admin edite el contenido de un `Share Request` pendiente antes de aprobar — solo
+  aprobar/rechazar tal como fue propuesto.
+- Acceso `single_use` para destinatarios registrados.
+- Autoría de templates de email más allá de popular los campos existentes `SendEmailInput.text`/`html`.
 
-## Capabilities (contract for sdd-spec)
+## Capacidades (contrato para sdd-spec)
 
-### New
-- `share-request-approval`: Share Request lifecycle, member/admin branch, platform-wide approval.
-- `admin-notifications`: bell + pending-requests page, global pending count.
-- `smtp-email-delivery`: real SMTP provider behind the existing `EmailProvider` contract.
+### Nuevas
+- `share-request-approval`: ciclo de vida del Share Request, bifurcación member/admin, aprobación a
+  nivel de plataforma.
+- `admin-notifications`: campanita + página de requests pendientes, cuenta global de pendientes.
+- `smtp-email-delivery`: provider SMTP real detrás del contrato `EmailProvider` existente.
 
-### Modified
-- `meeting-sharing` (009 behavior): createShare/revokeShare and grant creation gain the role branch;
-  ADR-0005's owner-only rule is superseded for `member` Owners.
+### Modificadas
+- `meeting-sharing` (comportamiento de 009): createShare/revokeShare y la creación de grants ganan la
+  bifurcación por rol; la regla owner-only de ADR-0005 queda reemplazada para Owners `member`.
 
-## Approach (high level — full design is sdd-design's job)
+## Enfoque (alto nivel — el diseño completo es trabajo de sdd-design)
 
-- **Email**: new `SmtpEmailProvider implements EmailProvider`, selected by `EMAIL_PROVIDER` in
-  `EmailProviderFactory` (reuse the factory; no caller changes — exactly 2 literal + 1 injected call
-  sites per explore.md). Add `nodemailer` to `apps/web/package.json` only. Env docs: `README.md` is the
-  only real sync target (no `.env*.example` files exist in-repo, per explore.md).
-- **Role branch**: extend the existing owner-check pattern in `meetingShareService.ts` /
-  `meetingAccessGrantService.ts` with the already-idiomatic `session.user.role !== "admin"` check
-  (currently route-only, `admin/authorized-accounts/route.ts` — new plumbing into actions/services, not
-  copy-paste). No new admin-check mechanism.
-- **Persistence**: `Share Request` needs new persisted pending state — neither `meetingShares` nor
-  `meetingAccessGrants` has a pending/approved/rejected column today. Exact schema shape (new table vs.
-  columns, access-type modeling) is sdd-design's decision.
-- **UI**: three modes attach inside the existing "Compartir reunión" card; the bell needs a small shared
-  nav component — none exists today, 3 pages hand-roll duplicate headers (explore.md).
-- **TDD (strict, per AGENTS.md)**: every service/role-check/state-transition change starts red in
-  `apps/__tests__/` mirror paths; existing owner-gate tests in
-  `meeting-share-service.test.ts` / `meeting-access-grant-service.test.ts` gain admin/member-branch cases.
+- **Email**: nuevo `SmtpEmailProvider implements EmailProvider`, seleccionado por `EMAIL_PROVIDER` en
+  `EmailProviderFactory` (se reutiliza el factory; sin cambios en los callers — exactamente 2 call sites
+  literales + 1 inyectado según explore.md). Agregar `nodemailer` solo a `apps/web/package.json`. Docs de
+  env: `README.md` es el único target de sync real (no existen archivos `.env*.example` en el repo,
+  según explore.md).
+- **Bifurcación por rol**: extender el patrón de chequeo de owner existente en `meetingShareService.ts` /
+  `meetingAccessGrantService.ts` con el chequeo ya idiomático `session.user.role !== "admin"` (hoy
+  route-only, `admin/authorized-accounts/route.ts` — plomería nueva hacia actions/services, no un
+  copy-paste). Sin ningún mecanismo de chequeo de admin nuevo.
+- **Persistencia**: `Share Request` necesita nuevo estado pendiente persistido — hoy ni `meetingShares`
+  ni `meetingAccessGrants` tienen una columna pending/approved/rejected. La forma exacta del schema
+  (tabla nueva vs. columnas, modelado del tipo de acceso) es decisión de sdd-design.
+- **UI**: los tres modos se adjuntan dentro de la card "Compartir reunión" existente; la campanita
+  necesita un pequeño componente de nav compartido — hoy no existe ninguno, 3 páginas arman a mano
+  headers duplicados (explore.md).
+- **TDD (estricto, según AGENTS.md)**: cada cambio de service/chequeo de rol/transición de estado
+  arranca en rojo en los paths espejo de `apps/__tests__/`; los tests de owner-gate existentes en
+  `meeting-share-service.test.ts` / `meeting-access-grant-service.test.ts` ganan casos de bifurcación
+  admin/member.
 
-## Open Question (flagged, NOT resolved here)
+## Pregunta Abierta (marcada, NO resuelta acá)
 
-- Rejected `Share Request`s for **registered** recipients (Access Grant path) have no existing UI surface
-  to passively render into — `MeetingDetailsView.tsx` persists no grants list (explore.md L57-59).
-  `sdd-design` must decide where passive discovery lives for that path.
+- Los `Share Request`s rechazados para destinatarios **registrados** (camino Access Grant) no tienen
+  ninguna superficie de UI existente donde renderizarse pasivamente — `MeetingDetailsView.tsx` no
+  persiste ninguna lista de grants (explore.md L57-59). `sdd-design` debe decidir dónde vive el
+  descubrimiento pasivo para ese camino.
 
-## Risks
+## Riesgos
 
-| Risk | Likelihood | Mitigation |
+| Riesgo | Probabilidad | Mitigación |
 |------|------------|------------|
-| Role branch weakens 009's owner gate (security regression) | Med | TDD-first on both branches; keep `WebMeetingRepository.visibleToUser` (visibility) untouched — sharing authority only |
-| SMTP misconfig breaks existing `restricted_email` flow | Low | Console fallback on missing config outside production (ADR-0004 requirement) |
-| Scope creep into notification/read-state features | Med | Non-goals listed above are contract, not suggestion |
+| La bifurcación por rol debilita el gate de owner de 009 (regresión de seguridad) | Media | TDD-first en ambas bifurcaciones; mantener `WebMeetingRepository.visibleToUser` (visibilidad) intacto — solo autoridad de compartido |
+| Una mala configuración de SMTP rompe el flujo `restricted_email` existente | Baja | Fallback a console cuando falta configuración fuera de producción (requisito de ADR-0004) |
+| Scope creep hacia features de notificación/estado de lectura | Media | Los non-goals listados arriba son contrato, no sugerencia |
 
-## Rollback Plan
+## Plan de Rollback
 
-- Feature branch → PR(s); revert the merge commit(s) restores owner-only behavior. Pending `Share
-  Request` rows are inert without the approval code path (they gate creation; nothing downstream reads
-  them). SMTP reverts to console provider via `EMAIL_PROVIDER` env alone — no code revert needed.
+- Feature branch → PR(s); revertir el/los merge commit(s) restaura el comportamiento owner-only. Las
+  filas de `Share Request` pendientes quedan inertes sin el code path de aprobación (solo gatean la
+  creación; nada corriente abajo las lee). SMTP vuelve al provider de console solo con la env
+  `EMAIL_PROVIDER` — no se necesita revertir código.
 
-## Success Criteria
+## Criterios de Éxito
 
-- [ ] A `member` Owner's share attempt creates a pending `Share Request` (one per recipient); an `admin`
-  Owner shares directly, unchanged.
-- [ ] Any platform admin can approve/reject; approval creates the correct grant/share row and sends a
-  real email; rejection creates nothing.
-- [ ] Bell badge equals the global pending count; dedicated admin page lists pending requests.
-- [ ] `single_use` offered only for unregistered recipients; `temporary` defaults to 15 days but the
-  member can set any day count; `permanent` default for participants.
-- [ ] A `member` can cancel their own pending `Share Request`; admins approve/reject as-proposed, no
-  editing.
-- [ ] With SMTP env configured, `restricted_email` shares and OTP codes arrive by real email. In
-  local/dev, missing config falls back to console. In production, missing config fails loudly and blocks
-  the send — never a silent console-only "email" once deployed.
-- [ ] All new logic test-first; existing suites green (`bun test apps/__tests__`).
+- [ ] El intento de compartido de un Owner `member` crea un `Share Request` pendiente (uno por
+  destinatario); un Owner `admin` comparte directamente, sin cambios.
+- [ ] Cualquier admin de la plataforma puede aprobar/rechazar; la aprobación crea la fila de grant/share
+  correcta y envía un email real; el rechazo no crea nada.
+- [ ] El badge de la campanita es igual a la cuenta global de pendientes; la página admin dedicada lista
+  los requests pendientes.
+- [ ] `single_use` se ofrece solo para destinatarios no registrados; `temporary` tiene 15 días por
+  defecto pero el member puede fijar cualquier cantidad de días; `permanent` es el default para
+  participantes.
+- [ ] Un `member` puede cancelar su propio `Share Request` pendiente; los admins aprueban/rechazan tal
+  como fue propuesto, sin editar.
+- [ ] Con la env de SMTP configurada, los compartidos `restricted_email` y los códigos OTP llegan por
+  email real. En local/dev, la configuración faltante cae a console. En producción, la configuración
+  faltante falla de forma ruidosa y bloquea el envío — nunca un "email" silencioso solo de console una
+  vez desplegado.
+- [ ] Toda la lógica nueva es test-first; las suites existentes en verde (`bun test apps/__tests__`).
