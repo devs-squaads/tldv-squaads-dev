@@ -1,40 +1,162 @@
-import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { describe, expect, it, afterAll } from "bun:test";
+import { createLiveConnection, sql } from "@meeting-bot/shared/db/liveConnection";
 import {
   EXTENSION_TRACKABLE_FRESHNESS_MS,
   EXTENSION_TRACKABLE_STATUSES,
+  type MeetingStatus,
 } from "@meeting-bot/shared/domain/meetingStatus";
 
-const repositorySource = readFileSync(
-  join(import.meta.dir, "../../../../packages/shared/src/repositories/MeetingRepository.ts"),
-  "utf8",
-);
+// Live-DB only — see MeetingAccessGrantRepository's test file for why (Bun's
+// mock.module() only honors the first registration per specifier per process).
+const CONNECTION_STRING = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/meeting_bot";
+const { pool, db } = createLiveConnection(CONNECTION_STRING);
 
-const trackableLookupSource = repositorySource.match(
-  /static async findTrackableByUrlAndOwner[\s\S]*?return meeting \?\? null;\n  }/,
-)?.[0];
+async function canConnect(): Promise<boolean> {
+  try {
+    await Promise.race([
+      db.execute(sql`SELECT 1`),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("timeout")), 1000)),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-describe("MeetingRepository trackable lookup contract", () => {
+const dbAvailable = await canConnect();
+
+const { MeetingRepository } = await import("../../../../packages/shared/src/repositories/MeetingRepository");
+
+async function insertUser(id: string): Promise<void> {
+  await db.execute(
+    sql`INSERT INTO "users" ("id", "email", "created_at", "updated_at")
+        VALUES (${id}, ${`${id}@squaads.com`}, now(), now())`,
+  );
+}
+
+async function insertMeeting(params: {
+  id: string;
+  ownerId: string;
+  url: string;
+  status: MeetingStatus;
+  createdAt: Date;
+}): Promise<void> {
+  await db.execute(
+    sql`INSERT INTO "meetings" ("id", "url", "owner_id", "status", "created_at", "updated_at")
+        VALUES (${params.id}, ${params.url}, ${params.ownerId}, ${params.status}, ${params.createdAt}, ${params.createdAt})`,
+  );
+}
+
+describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (requires `bun run infra:up`)", () => {
+  afterAll(async () => {
+    if (dbAvailable) await pool.end();
+  });
+
+  it("does not return a meeting with the same URL owned by a different user (cross-tenant leak guard)", async () => {
+    const suffix = crypto.randomUUID();
+    const ownerId = `owner-${suffix}`;
+    const otherOwnerId = `other-owner-${suffix}`;
+    const url = `https://meet.example.com/${suffix}`;
+    const meetingId = `meeting-${suffix}`;
+    const createdAfter = new Date(Date.now() - 60_000);
+
+    await insertUser(ownerId);
+    await insertUser(otherOwnerId);
+    await insertMeeting({ id: meetingId, ownerId: otherOwnerId, url, status: "recording", createdAt: new Date() });
+
+    const result = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
+    expect(result).toBeNull();
+
+    await db.execute(sql`DELETE FROM "meetings" WHERE "id" = ${meetingId}`);
+    await db.execute(sql`DELETE FROM "users" WHERE "id" IN (${ownerId}, ${otherOwnerId})`);
+  });
+
+  it("excludes a meeting created before createdAfter, includes one created after", async () => {
+    const suffix = crypto.randomUUID();
+    const ownerId = `owner-${suffix}`;
+    const url = `https://meet.example.com/${suffix}`;
+    const staleId = `meeting-stale-${suffix}`;
+    const freshId = `meeting-fresh-${suffix}`;
+    const createdAfter = new Date();
+
+    await insertUser(ownerId);
+    await insertMeeting({
+      id: staleId,
+      ownerId,
+      url,
+      status: "recording",
+      createdAt: new Date(createdAfter.getTime() - 60_000),
+    });
+
+    const staleResult = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
+    expect(staleResult).toBeNull();
+
+    await insertMeeting({
+      id: freshId,
+      ownerId,
+      url,
+      status: "recording",
+      createdAt: new Date(createdAfter.getTime() + 60_000),
+    });
+
+    const freshResult = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
+    expect(freshResult?.id).toBe(freshId);
+
+    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${staleId}, ${freshId})`);
+    await db.execute(sql`DELETE FROM "users" WHERE "id" = ${ownerId}`);
+  });
+
+  it("excludes a non-trackable status (completed) but includes transcription_error", async () => {
+    const suffix = crypto.randomUUID();
+    const ownerId = `owner-${suffix}`;
+    const url = `https://meet.example.com/${suffix}`;
+    const completedId = `meeting-completed-${suffix}`;
+    const errorId = `meeting-transcription-error-${suffix}`;
+    const createdAfter = new Date(Date.now() - 60_000);
+
+    await insertUser(ownerId);
+    await insertMeeting({ id: completedId, ownerId, url, status: "completed", createdAt: new Date() });
+
+    const completedResult = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
+    expect(completedResult).toBeNull();
+
+    await insertMeeting({ id: errorId, ownerId, url, status: "transcription_error", createdAt: new Date() });
+
+    const errorResult = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
+    expect(errorResult?.id).toBe(errorId);
+
+    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${completedId}, ${errorId})`);
+    await db.execute(sql`DELETE FROM "users" WHERE "id" = ${ownerId}`);
+  });
+
+  it("returns the most recent matching row when two valid rows exist (newest-first)", async () => {
+    const suffix = crypto.randomUUID();
+    const ownerId = `owner-${suffix}`;
+    const url = `https://meet.example.com/${suffix}`;
+    const olderId = `meeting-older-${suffix}`;
+    const newerId = `meeting-newer-${suffix}`;
+    const createdAfter = new Date(Date.now() - 60_000);
+    const now = new Date();
+
+    await insertUser(ownerId);
+    await insertMeeting({ id: olderId, ownerId, url, status: "recording", createdAt: new Date(now.getTime() - 5_000) });
+    await insertMeeting({ id: newerId, ownerId, url, status: "transcribing", createdAt: now });
+
+    const result = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
+    expect(result?.id).toBe(newerId);
+
+    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${olderId}, ${newerId})`);
+    await db.execute(sql`DELETE FROM "users" WHERE "id" = ${ownerId}`);
+  });
+});
+
+describe("MeetingRepository trackable lookup contract — exported values", () => {
   it("uses a same-day freshness window that supports meetings longer than ten minutes", () => {
     expect(EXTENSION_TRACKABLE_FRESHNESS_MS).toBe(24 * 60 * 60 * 1000);
     expect(EXTENSION_TRACKABLE_FRESHNESS_MS).toBeGreaterThan(10 * 60 * 1000);
   });
 
-  it("excludes arbitrarily old rows with an explicit creation-time lower bound", () => {
-    expect(trackableLookupSource).toContain("gte(meetings.createdAt, createdAfter)");
-  });
-
-  it("keeps owner scoping and chooses the newest valid matching row", () => {
-    expect(trackableLookupSource).toContain("eq(meetings.ownerId, ownerId)");
-    expect(trackableLookupSource).toContain(".orderBy(desc(meetings.createdAt))");
-    expect(trackableLookupSource?.indexOf(".orderBy(desc(meetings.createdAt))")).toBeLessThan(
-      trackableLookupSource?.indexOf(".limit(1)") ?? -1,
-    );
-  });
-
   it("keeps transcription error recovery inside the trackable status set", () => {
     expect(EXTENSION_TRACKABLE_STATUSES).toContain("transcription_error");
-    expect(trackableLookupSource).toContain("EXTENSION_TRACKABLE_STATUSES");
   });
 });
