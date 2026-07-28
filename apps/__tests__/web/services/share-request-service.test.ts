@@ -25,6 +25,7 @@ const state: {
   createCalls: ShareRequestRow[];
   resolveCalls: { id: string; input: Record<string, unknown> }[];
   cancelCalls: string[];
+  attachCalls: { id: string; ref: Record<string, unknown> }[];
   deleteCalls: string[];
   deleteResolvedCalls: string[];
   grantCalls: Record<string, unknown>[];
@@ -35,6 +36,7 @@ const state: {
   createCalls: [],
   resolveCalls: [],
   cancelCalls: [],
+  attachCalls: [],
   deleteCalls: [],
   deleteResolvedCalls: [],
   grantCalls: [],
@@ -47,6 +49,7 @@ function resetState() {
   state.createCalls = [];
   state.resolveCalls = [];
   state.cancelCalls = [];
+  state.attachCalls = [];
   state.deleteCalls = [];
   state.deleteResolvedCalls = [];
   state.grantCalls = [];
@@ -85,25 +88,45 @@ bunMock.module("@meeting-bot/shared/repositories/MeetingShareRequestRepository",
     listPending: async () => Object.values(state.requests).filter((r) => r.status === "pending"),
     countPending: async () => Object.values(state.requests).filter((r) => r.status === "pending").length,
     listByMeetingId: async (meetingId: string) => Object.values(state.requests).filter((r) => r.meetingId === meetingId),
+    // Mirrors the real repository's atomic guard: only mutates (and returns the row) when the
+    // request is still pending at the moment of the write; returns null otherwise, simulating a
+    // losing concurrent call whose UPDATE ... WHERE status = 'pending' affected zero rows.
     resolve: async (id: string, input: Record<string, unknown>) => {
       state.resolveCalls.push({ id, input });
       const row = state.requests[id];
-      if (row) {
-        state.requests[id] = {
-          ...row,
-          status: input.status as ShareRequestRow["status"],
-          resolvedBy: (input.resolvedBy as string | null) ?? null,
-          resolvedGrantId: (input.resolvedGrantId as string | null) ?? null,
-          resolvedShareId: (input.resolvedShareId as string | null) ?? null,
-          resolvedAt: new Date(),
-        };
+      if (!row || row.status !== "pending") {
+        return null;
       }
+      const updated: ShareRequestRow = {
+        ...row,
+        status: input.status as ShareRequestRow["status"],
+        resolvedBy: (input.resolvedBy as string | null) ?? null,
+        resolvedGrantId: (input.resolvedGrantId as string | null) ?? null,
+        resolvedShareId: (input.resolvedShareId as string | null) ?? null,
+        resolvedAt: new Date(),
+      };
+      state.requests[id] = updated;
+      return updated;
     },
     cancel: async (id: string) => {
       state.cancelCalls.push(id);
       const row = state.requests[id];
+      if (!row || row.status !== "pending") {
+        return null;
+      }
+      const updated: ShareRequestRow = { ...row, status: "cancelled", resolvedAt: new Date() };
+      state.requests[id] = updated;
+      return updated;
+    },
+    attachResolutionRef: async (id: string, ref: Record<string, unknown>) => {
+      state.attachCalls.push({ id, ref });
+      const row = state.requests[id];
       if (row) {
-        state.requests[id] = { ...row, status: "cancelled", resolvedAt: new Date() };
+        state.requests[id] = {
+          ...row,
+          resolvedGrantId: (ref.resolvedGrantId as string | null) ?? row.resolvedGrantId,
+          resolvedShareId: (ref.resolvedShareId as string | null) ?? row.resolvedShareId,
+        };
       }
     },
     deleteById: async (id: string) => {
@@ -266,8 +289,11 @@ describe("ShareRequestService", () => {
 
     it("rejects a non-pending request", async () => {
       seedPendingRequest({ status: "approved" });
+      // The atomic cancel() call is still made (it's the race arbiter) but affects zero rows, so
+      // status must remain untouched.
       await expect(ShareRequestService.cancelShareRequest("owner-1", "request-1")).rejects.toThrow();
-      expect(state.cancelCalls).toHaveLength(0);
+      expect(state.cancelCalls).toEqual(["request-1"]);
+      expect(state.requests["request-1"]?.status).toBe("approved");
     });
   });
 
@@ -371,13 +397,17 @@ describe("ShareRequestService", () => {
 
       await ShareRequestService.approveShareRequest(admin, "request-1");
 
+      // The atomic status transition happens BEFORE the grant exists, so it can't carry
+      // resolvedGrantId yet — that's stamped by the separate non-racy attachResolutionRef follow-up.
       expect(state.resolveCalls).toHaveLength(1);
       expect(state.resolveCalls[0]?.input).toMatchObject({
         status: "approved",
         resolvedBy: "admin-1",
-        resolvedGrantId: "grant-1",
       });
+      expect(state.attachCalls).toHaveLength(1);
+      expect(state.attachCalls[0]).toMatchObject({ id: "request-1", ref: { resolvedGrantId: "grant-1" } });
       expect(state.requests["request-1"]?.status).toBe("approved");
+      expect(state.requests["request-1"]?.resolvedGrantId).toBe("grant-1");
     });
 
     it("stamps resolved fields on approval (unregistered path)", async () => {
@@ -393,8 +423,41 @@ describe("ShareRequestService", () => {
       expect(state.resolveCalls[0]?.input).toMatchObject({
         status: "approved",
         resolvedBy: "admin-1",
-        resolvedShareId: "share-1",
       });
+      expect(state.attachCalls[0]).toMatchObject({ id: "request-1", ref: { resolvedShareId: "share-1" } });
+      expect(state.requests["request-1"]?.resolvedShareId).toBe("share-1");
+    });
+
+    it("does not create a grant when another concurrent call already resolved the request (registered path race)", async () => {
+      seedPendingRequest();
+      // Simulates a losing concurrent call: another admin's approve/reject/cancel already flipped
+      // status between requireExisting()'s read and this call's atomic resolve() — the guarded
+      // UPDATE affects 0 rows and the mock returns null, same as the real WHERE status = 'pending'.
+      state.requests["request-1"] = { ...state.requests["request-1"], status: "approved" };
+
+      await expect(ShareRequestService.approveShareRequest(admin, "request-1")).rejects.toThrow(
+        "Only a pending share request can be approved"
+      );
+
+      expect(state.grantCalls).toHaveLength(0);
+      expect(state.attachCalls).toHaveLength(0);
+    });
+
+    it("does not create a share/send an email when another concurrent call already resolved the request (unregistered path race)", async () => {
+      seedPendingRequest({
+        granteeUserId: null,
+        recipientEmail: "guest@example.com",
+        recipientEmailNormalized: "guest@example.com",
+        accessType: "permanent",
+      });
+      state.requests["request-1"] = { ...state.requests["request-1"], status: "rejected" };
+
+      await expect(ShareRequestService.approveShareRequest(admin, "request-1")).rejects.toThrow(
+        "Only a pending share request can be approved"
+      );
+
+      expect(state.shareCalls).toHaveLength(0);
+      expect(state.attachCalls).toHaveLength(0);
     });
 
     it("approves exactly as proposed — recipient and access type are not editable", async () => {
@@ -446,8 +509,11 @@ describe("ShareRequestService", () => {
 
     it("rejects a non-pending request", async () => {
       seedPendingRequest({ status: "cancelled" });
+      // The atomic resolve() call is still made (it's the race arbiter) but affects zero rows, so
+      // status must remain untouched.
       await expect(ShareRequestService.rejectShareRequest(admin, "request-1")).rejects.toThrow();
-      expect(state.resolveCalls).toHaveLength(0);
+      expect(state.resolveCalls).toHaveLength(1);
+      expect(state.requests["request-1"]?.status).toBe("cancelled");
     });
   });
 

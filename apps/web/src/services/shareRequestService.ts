@@ -1,10 +1,7 @@
 import { randomUUID } from "crypto";
 import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
 import { MeetingShareRequestRepository } from "@meeting-bot/shared/repositories/MeetingShareRequestRepository";
-import type {
-  MeetingShareRequestRecord,
-  MeetingShareRequestStatus,
-} from "@meeting-bot/shared/repositories/MeetingShareRequestRepository";
+import type { MeetingShareRequestRecord } from "@meeting-bot/shared/repositories/MeetingShareRequestRepository";
 import type { SessionCaller } from "@/lib/sessionCaller";
 import { MeetingAccessGrantService } from "@/services/meetingAccessGrantService";
 import { MeetingShareService } from "@/services/meetingShareService";
@@ -95,19 +92,33 @@ export class ShareRequestService {
     if (request.requesterId !== callerId) {
       throw new Error("Only the requester can cancel this share request");
     }
-    if (request.status !== "pending") {
+    // Atomic gate: the guarded UPDATE (WHERE status = 'pending') is the race arbiter, not this
+    // findById's status field — a concurrent cancel/approve/reject can flip it between the read
+    // above and this write.
+    const cancelled = await MeetingShareRequestRepository.cancel(requestId);
+    if (!cancelled) {
       throw new Error("Only a pending share request can be cancelled");
     }
-    await MeetingShareRequestRepository.cancel(requestId);
   }
 
   static async approveShareRequest(caller: SessionCaller, requestId: string): Promise<void> {
     if (caller.role !== "admin") {
       throw new Error("Only an admin can approve a share request");
     }
-    const request = await this.requirePending(requestId, "approved");
+    const request = await this.requireExisting(requestId);
 
     const ttl = resolveTtlFromAccessType(request.accessType, request.expiresInDays);
+
+    // Atomic gate FIRST, before any downstream grant/share creation or email send: the guarded
+    // UPDATE (WHERE status = 'pending') is the race arbiter. Only the winner of a concurrent
+    // approve/reject/cancel race reaches the side effects below.
+    const resolved = await MeetingShareRequestRepository.resolve(requestId, {
+      status: "approved",
+      resolvedBy: caller.id,
+    });
+    if (!resolved) {
+      throw new Error("Only a pending share request can be approved");
+    }
 
     if (request.granteeUserId) {
       // 013/Phase 4.2: accessType + expiresInDays are passed through additively (alongside the
@@ -122,11 +133,9 @@ export class ShareRequestService {
         expiresInDays: request.expiresInDays ?? undefined,
         ...ttl,
       });
-      await MeetingShareRequestRepository.resolve(requestId, {
-        status: "approved",
-        resolvedBy: caller.id,
-        resolvedGrantId: grant.id,
-      });
+      // Status is already terminal at this point (only the winning caller gets here), so this
+      // follow-up write is a plain by-id update, not another race.
+      await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedGrantId: grant.id });
       return;
     }
 
@@ -150,23 +159,22 @@ export class ShareRequestService {
       ...ttl,
     };
     const share = await MeetingShareService.createShare(shareInput, request.requesterId);
-    await MeetingShareRequestRepository.resolve(requestId, {
-      status: "approved",
-      resolvedBy: caller.id,
-      resolvedShareId: share.id,
-    });
+    await MeetingShareRequestRepository.attachResolutionRef(requestId, { resolvedShareId: share.id });
   }
 
   static async rejectShareRequest(caller: SessionCaller, requestId: string): Promise<void> {
     if (caller.role !== "admin") {
       throw new Error("Only an admin can reject a share request");
     }
-    await this.requirePending(requestId, "rejected");
+    await this.requireExisting(requestId);
 
-    await MeetingShareRequestRepository.resolve(requestId, {
+    const resolved = await MeetingShareRequestRepository.resolve(requestId, {
       status: "rejected",
       resolvedBy: caller.id,
     });
+    if (!resolved) {
+      throw new Error("Only a pending share request can be rejected");
+    }
   }
 
   // Owner-gated (the requester in practice — only member Owners create requests). Only a
@@ -216,17 +224,14 @@ export class ShareRequestService {
     return MeetingShareRequestRepository.listByMeetingId(meetingId);
   }
 
-  // Shared pending-lookup + terminal-state guard for approve/reject; verb only affects the error text.
-  private static async requirePending(
-    requestId: string,
-    verb: Extract<MeetingShareRequestStatus, "approved" | "rejected">
-  ): Promise<ShareRequestRecord> {
+  // Existence guard for approve/reject, used to fetch the immutable request data (accessType,
+  // recipient, requesterId) needed to build the downstream grant/share. The pending check itself
+  // is NOT done here — it's the atomic resolve() gate in the caller, since a plain status read
+  // here would be racy against a concurrent approve/reject/cancel.
+  private static async requireExisting(requestId: string): Promise<ShareRequestRecord> {
     const request = await MeetingShareRequestRepository.findById(requestId);
     if (!request) {
       throw new Error("Share request not found");
-    }
-    if (request.status !== "pending") {
-      throw new Error(`Only a pending share request can be ${verb === "approved" ? "approved" : "rejected"}`);
     }
     return request;
   }

@@ -256,6 +256,40 @@ describe.skipIf(!dbAvailable)("MeetingShareRequestRepository CRUD (requires `bun
     await cleanupMeeting(request.meetingId);
   });
 
+  it("resolve is the atomic race arbiter — of two concurrent resolve() calls on the same pending row, exactly one succeeds", async () => {
+    const suffix = crypto.randomUUID();
+    const request = makeRequest(suffix);
+    await MeetingShareRequestRepository.create(request);
+
+    const [first, second] = await Promise.all([
+      MeetingShareRequestRepository.resolve(request.id, { status: "approved", resolvedBy: `admin-a-${suffix}` }),
+      MeetingShareRequestRepository.resolve(request.id, { status: "rejected", resolvedBy: `admin-b-${suffix}` }),
+    ]);
+
+    const winners = [first, second].filter((row) => row !== null);
+    expect(winners).toHaveLength(1);
+
+    const found = await MeetingShareRequestRepository.findById(request.id);
+    expect(["approved", "rejected"]).toContain(found?.status);
+
+    await cleanupMeeting(request.meetingId);
+  });
+
+  it("cancel returns null (not another cancelled row) once the request is already resolved", async () => {
+    const suffix = crypto.randomUUID();
+    const request = makeRequest(suffix);
+    await MeetingShareRequestRepository.create(request);
+
+    await MeetingShareRequestRepository.resolve(request.id, { status: "approved", resolvedBy: `admin-${suffix}` });
+    const cancelled = await MeetingShareRequestRepository.cancel(request.id);
+
+    expect(cancelled).toBeNull();
+    const found = await MeetingShareRequestRepository.findById(request.id);
+    expect(found?.status).toBe("approved");
+
+    await cleanupMeeting(request.meetingId);
+  });
+
   it("deleteById removes the row", async () => {
     const suffix = crypto.randomUUID();
     const request = makeRequest(suffix);

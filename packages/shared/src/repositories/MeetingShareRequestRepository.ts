@@ -48,10 +48,15 @@ export class MeetingShareRequestRepository {
       .orderBy(desc(meetingShareRequests.createdAt));
   }
 
-  /** Terminal transition (approved/rejected/cancelled) — stamps the resolver + resolved-* fields. */
-  static async resolve(id: string, input: ResolveShareRequestInput): Promise<void> {
+  /**
+   * Terminal transition (approved/rejected/cancelled) — atomic race arbiter: guarded on
+   * `status = 'pending'` so only the first of two concurrent callers wins the write. Returns the
+   * updated row, or `null` when another call already resolved it first (caller must treat that as
+   * "not pending" and stop before any downstream side effect).
+   */
+  static async resolve(id: string, input: ResolveShareRequestInput): Promise<MeetingShareRequestRecord | null> {
     const when = input.resolvedAt ?? new Date();
-    await db
+    const [row] = await db
       .update(meetingShareRequests)
       .set({
         status: input.status,
@@ -61,17 +66,40 @@ export class MeetingShareRequestRepository {
         resolvedShareId: input.resolvedShareId ?? null,
         updatedAt: when,
       })
-      .where(eq(meetingShareRequests.id, id));
+      .where(and(eq(meetingShareRequests.id, id), eq(meetingShareRequests.status, "pending")))
+      .returning();
+    return row ?? null;
   }
 
-  /** Author-initiated cancel — same terminal shape as `resolve`, no resolvedBy (self-service, not an admin decision). */
-  static async cancel(id: string, when: Date = new Date()): Promise<void> {
-    await db
+  /** Author-initiated cancel — same atomic gate as `resolve`, no resolvedBy (self-service, not an admin decision). */
+  static async cancel(id: string, when: Date = new Date()): Promise<MeetingShareRequestRecord | null> {
+    const [row] = await db
       .update(meetingShareRequests)
       .set({
         status: "cancelled",
         resolvedAt: when,
         updatedAt: when,
+      })
+      .where(and(eq(meetingShareRequests.id, id), eq(meetingShareRequests.status, "pending")))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
+   * Non-racy follow-up write — stamps the downstream grant/share id onto an already-resolved row.
+   * Only called after `resolve()` has atomically flipped status away from "pending", so only the
+   * single winning caller ever reaches this; no status guard needed.
+   */
+  static async attachResolutionRef(
+    id: string,
+    ref: { resolvedGrantId?: string | null; resolvedShareId?: string | null }
+  ): Promise<void> {
+    await db
+      .update(meetingShareRequests)
+      .set({
+        resolvedGrantId: ref.resolvedGrantId ?? null,
+        resolvedShareId: ref.resolvedShareId ?? null,
+        updatedAt: new Date(),
       })
       .where(eq(meetingShareRequests.id, id));
   }
