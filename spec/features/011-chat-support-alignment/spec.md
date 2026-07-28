@@ -1,164 +1,173 @@
-# 011 · Chat Support Alignment
+# 011 · Alineación del Soporte de Chat
 
-**Status:** spec
-**Branch:** feature branches off `dev` (PR-A then PR-B, sequential)
+**Estado:** spec
+**Rama:** ramas de feature desde `dev` (PR-A y luego PR-B, secuenciales)
 
-## Purpose
+## Propósito
 
-Realign the Squaads Assistant's UI, copy, and knowledge with the shipped product. The Soporte topic
-falsely claims support is "Próximamente" while the bug-report → Discord flow already renders in the same
-panel; the `ReportBugButton` is loose at the panel bottom and 100% English inside an all-Spanish (voseo)
-UI; the corpus/`STARTER_TOPICS` still describe pre-009/010 behavior (public share links, missing
-`transcription_error`); and `searchMeetingsTool` hardcodes a status enum that omits `transcription_error`.
+Realinear la UI, la copy y el conocimiento del Squaads Assistant con el producto ya desplegado. El topic
+Soporte afirma falsamente que el soporte está "Próximamente" cuando el flujo de reporte de bug → Discord ya
+se renderiza en el mismo panel; el `ReportBugButton` está suelto al final del panel y 100% en inglés dentro
+de una UI totalmente en español (voseo); el corpus/`STARTER_TOPICS` todavía describe el comportamiento
+previo a 009/010 (enlaces de compartido públicos, falta `transcription_error`); y `searchMeetingsTool`
+hardcodea un enum de estados que omite `transcription_error`.
 
-Domain vocabulary is fixed by root `CONTEXT.md` — this spec uses those exact terms: **Reportar un
-problema**, **Soporte**, **Acceso** / **dar acceso**, **Enlace de acceso restringido**. Two sequential
-PRs, each under the 400-line budget.
-
----
-
-## PR-A — Report button placement + Spanish copy
-
-### Requirement: ReportBugButton renders only after reaching Soporte (content-derived, no topic-id pipeline)
-
-The system MUST render `ReportBugButton` inside the chat panel ONLY once the Soporte answer is present in
-the conversation. Visibility MUST be derived from message content (`hasSupportTopicMarker`, matching the
-literal "Reportar un problema" substring in an assistant message) rather than from ephemeral component
-state — a local flag alone does not survive `useChatStream`'s localStorage/DB history restore on reload,
-which was found and corrected during implementation via the mandatory post-apply bounded review. No
-topic-id pipeline, no intent detection. `reset()` MUST clear conversation state so the derived visibility
-returns to hidden. The button MUST NOT appear in the starter state or during an unrelated free-text
-conversation that never reached Soporte. *(Visual-exception: button placement/rendering is validated
-manually per the repo's visual-UI TDD exception; the derivation predicate itself is unit-tested.)*
-
-#### Scenario: Soporte click reveals the button and the corrected answer
-
-- GIVEN the assistant is in the starter state
-- WHEN the user clicks the Soporte topic card
-- THEN the corrected Soporte answer renders (no "Próximamente" claim)
-- AND the "Reportar un problema" button becomes visible in the panel
-
-#### Scenario: Free-text conversation does not reveal the button
-
-- GIVEN the user has started a free-text conversation without clicking Soporte
-- WHEN messages exist in the thread
-- THEN the "Reportar un problema" button MUST NOT be visible
-
-#### Scenario: Button visibility survives a page reload
-
-- GIVEN the user clicked Soporte and the button is visible
-- WHEN the page reloads and `useChatStream` restores the conversation from cache/DB
-- THEN the Soporte answer is restored
-- AND the "Reportar un problema" button is visible again (not lost, since visibility derives from the
-  restored message content, not from ephemeral state)
-
-#### Scenario: Reset returns to starter state with the button hidden
-
-- GIVEN Soporte was clicked and the button is visible
-- WHEN the user resets the conversation
-- THEN the starter topics render again
-- AND the derived visibility (and the manual reveal flag, see below) resolve to hidden
-
-### Requirement: A manual escape hatch reveals the button without losing history
-
-The system MUST offer a persistent, always-visible manual link ("¿Necesitás reportar un problema?", next
-to "Nueva conversación") that reveals the button in-session without resetting the conversation or
-requiring backend availability, for the case where a restored conversation's history never reached
-Soporte. This closes an R4 Resilience gap found during the mandatory bounded review: before this PR the
-button was unconditionally visible; after moving it behind content-derivation, a restored conversation
-without the marker had no button-reachable path except losing history via reset.
-
-#### Scenario: Manual reveal works without losing history or the backend
-
-- GIVEN a restored conversation has messages but none reference Soporte
-- WHEN the user clicks "¿Necesitás reportar un problema?"
-- THEN the "Reportar un problema" button becomes visible
-- AND the existing conversation history is preserved
-- AND no network request was required to reveal it
-
-### Requirement: All ReportBugButton copy is Spanish (voseo)
-
-The system MUST translate the 9 English strings across `ReportBugButton.tsx` and
-`reportBugButton.logic.ts` to Spanish voseo. The collapsed-button label MUST be the canonical
-"Reportar un problema" (per `CONTEXT.md`). Remaining strings (placeholder, aria-label, submit/submitting
-label, cancel, success/error feedback) MUST also be voseo. *(TDD-mandatory: `reportBugButton.logic.ts`
-strings — `report-bug-button.logic.test.ts` asserts the English literals verbatim and MUST be updated
-test-first in the same PR.)*
-
-#### Scenario: Logic test asserts the Spanish literals
-
-- GIVEN `report-bug-button.logic.test.ts` currently asserts English literals
-- WHEN the logic strings are translated to voseo
-- THEN the test is updated first to assert the Spanish literals
-- AND `bun test apps/__tests__` passes with no English literal remaining
-
-### Requirement: Soporte canned answer and one corpus line teach the report path
-
-The system MUST remove the false "Próximamente" claim from the Soporte answer in `STARTER_TOPICS`
-(`ChatMessages.tsx`) and add exactly one corpus line teaching the assistant that a user reports a problem
-via the Soporte topic (so PR-A is self-consistent).
-
-#### Scenario: Assistant explains the Soporte report path in free text
-
-- GIVEN a user is in a free-text conversation
-- WHEN the user asks how to report a problem
-- THEN the assistant explains the report lives in the Soporte topic ("Reportar un problema")
-- AND does NOT claim the feature is upcoming/"Próximamente"
+El vocabulario de dominio está fijado por `docs/CONTEXT.md` — este spec usa esos términos exactos:
+**Reportar un problema**, **Soporte**, **Acceso** / **dar acceso**, **Enlace de acceso restringido**. Dos
+PRs secuenciales, cada uno dentro del presupuesto de 400 líneas.
 
 ---
 
-## PR-B — Knowledge corpus refresh + status enum root-cause fix
+## PR-A — Ubicación del botón de reporte + copy en español
 
-### Requirement: Corpus/STARTER_TOPICS reflect 009/010 reality only
+### Requerimiento: ReportBugButton se renderiza solo después de llegar a Soporte (derivado del contenido, sin pipeline de topic-id)
 
-The system MUST update the corpus and `STARTER_TOPICS`, scoped to 009/010 deltas ONLY: use
-"dar acceso"/"acceso" vocabulary (never "Access Grant" in user copy); state "enlace de acceso restringido"
-as the only share type and remove any "link público" claim; document participant suggestions,
-deactivated-owner lockout, `transcription_error` + recovery, and ADR-0007 co-attendee auto-grant. No other
-corpus docs are touched.
+El sistema DEBE renderizar `ReportBugButton` dentro del panel de chat SOLO una vez que la respuesta de
+Soporte esté presente en la conversación. La visibilidad DEBE derivarse del contenido de los mensajes
+(`hasSupportTopicMarker`, que matchea el substring literal "Reportar un problema" en un mensaje del
+asistente) en lugar de un estado efímero de componente — una flag local por sí sola no sobrevive la
+restauración de historial desde localStorage/DB de `useChatStream` al recargar, lo cual se encontró y
+corrigió durante la implementación mediante la revisión acotada obligatoria post-apply. Sin pipeline de
+topic-id, sin detección de intención. `reset()` DEBE limpiar el estado de la conversación para que la
+visibilidad derivada vuelva a estar oculta. El botón NO DEBE aparecer en el estado inicial ni durante una
+conversación de texto libre no relacionada que nunca llegó a Soporte. *(Excepción visual: la
+ubicación/renderizado del botón se valida manualmente según la excepción de TDD visual-UI del repo; el
+predicado de derivación en sí tiene tests unitarios.)*
 
-#### Scenario: Corpus no longer offers public links
+#### Escenario: El click en Soporte revela el botón y la respuesta corregida
 
-- GIVEN the corpus previously described a public share link
-- WHEN a user asks how to share a meeting
-- THEN the assistant describes only an "enlace de acceso restringido" (restricted email)
-- AND MUST NOT mention public/"link público" sharing as a current option
+- DADO que el asistente está en el estado inicial
+- CUANDO el usuario hace click en la tarjeta del topic Soporte
+- ENTONCES se renderiza la respuesta corregida de Soporte (sin la afirmación "Próximamente")
+- Y el botón "Reportar un problema" se vuelve visible en el panel
 
-#### Scenario: Corpus reflects transcription_error recovery
+#### Escenario: Una conversación de texto libre no revela el botón
 
-- GIVEN a meeting reached `transcription_error`
-- WHEN a user asks why a meeting shows a transcription error
-- THEN the assistant explains the recording is safe and can be reprocessed from storage
+- DADO que el usuario inició una conversación de texto libre sin hacer click en Soporte
+- CUANDO existen mensajes en el hilo
+- ENTONCES el botón "Reportar un problema" NO DEBE estar visible
 
-### Requirement: search_meetings status enum sourced from shared canonical list
+#### Escenario: La visibilidad del botón sobrevive a una recarga de página
 
-The system MUST export a canonical meeting-status list from `packages/shared/src/domain/meetingStatus.ts`
-and have `searchMeetingsTool` (`apps/web/src/integrations/chat/tools/definitions.ts`) consume it instead
-of a hardcoded array, so the tool accepts every real status including `transcription_error`. *(TDD-mandatory:
-the enum export and its consumption — test-first.)*
+- DADO que el usuario hizo click en Soporte y el botón está visible
+- CUANDO la página se recarga y `useChatStream` restaura la conversación desde caché/DB
+- ENTONCES la respuesta de Soporte se restaura
+- Y el botón "Reportar un problema" está visible de nuevo (no se pierde, porque la visibilidad se deriva
+  del contenido de los mensajes restaurados, no de estado efímero)
 
-#### Scenario: search_meetings accepts transcription_error
+#### Escenario: El reset vuelve al estado inicial con el botón oculto
 
-- GIVEN the `search_meetings` tool receives a status filter of `transcription_error`
-- WHEN the tool schema validates the argument
-- THEN `transcription_error` is a valid value (not rejected)
-- AND the accepted set matches the shared canonical status list exactly
+- DADO que se hizo click en Soporte y el botón está visible
+- CUANDO el usuario resetea la conversación
+- ENTONCES los topics iniciales se renderizan de nuevo
+- Y la visibilidad derivada (y la flag de revelado manual, ver abajo) resuelven a oculto
 
-#### Scenario: Adding a status cannot drift the tool
+### Requerimiento: Una vía de escape manual revela el botón sin perder el historial
 
-- GIVEN a new status is added to the shared canonical list
-- WHEN `searchMeetingsTool` builds its schema
-- THEN the tool's accepted statuses include the new value with no separate edit
+El sistema DEBE ofrecer un link manual persistente y siempre visible ("¿Necesitás reportar un problema?",
+junto a "Nueva conversación") que revele el botón dentro de la sesión sin resetear la conversación ni
+requerir disponibilidad del backend, para el caso en que el historial de una conversación restaurada nunca
+llegó a Soporte. Esto cierra un gap de R4 Resilience encontrado durante la revisión acotada obligatoria:
+antes de este PR el botón era incondicionalmente visible; después de moverlo detrás de la derivación por
+contenido, una conversación restaurada sin el marcador no tenía ninguna vía para alcanzar el botón excepto
+perder el historial vía reset.
+
+#### Escenario: El revelado manual funciona sin perder el historial ni el backend
+
+- DADO que una conversación restaurada tiene mensajes pero ninguno referencia Soporte
+- CUANDO el usuario hace click en "¿Necesitás reportar un problema?"
+- ENTONCES el botón "Reportar un problema" se vuelve visible
+- Y el historial de conversación existente se preserva
+- Y no se requirió ningún request de red para revelarlo
+
+### Requerimiento: Toda la copy de ReportBugButton está en español (voseo)
+
+El sistema DEBE traducir las 9 strings en inglés de `ReportBugButton.tsx` y `reportBugButton.logic.ts` al
+español voseo. La etiqueta del botón colapsado DEBE ser la canónica "Reportar un problema" (según
+`CONTEXT.md`). Las strings restantes (placeholder, aria-label, etiqueta de enviar/enviando, cancelar,
+feedback de éxito/error) también DEBEN estar en voseo. *(TDD-obligatorio: las strings de
+`reportBugButton.logic.ts` — `report-bug-button.logic.test.ts` afirma los literales en inglés textualmente
+y DEBE actualizarse primero-el-test en el mismo PR.)*
+
+#### Escenario: El test de lógica afirma los literales en español
+
+- DADO que `report-bug-button.logic.test.ts` actualmente afirma literales en inglés
+- CUANDO las strings de lógica se traducen a voseo
+- ENTONCES el test se actualiza primero para afirmar los literales en español
+- Y `bun test apps/__tests__` pasa sin que quede ningún literal en inglés
+
+### Requerimiento: La respuesta prearmada de Soporte y una línea del corpus enseñan el camino del reporte
+
+El sistema DEBE eliminar la falsa afirmación "Próximamente" de la respuesta de Soporte en
+`STARTER_TOPICS` (`ChatMessages.tsx`) y agregar exactamente una línea de corpus que le enseñe al asistente
+que un usuario reporta un problema a través del topic Soporte (para que el PR-A sea autoconsistente).
+
+#### Escenario: El asistente explica el camino de reporte de Soporte en texto libre
+
+- DADO que un usuario está en una conversación de texto libre
+- CUANDO el usuario pregunta cómo reportar un problema
+- ENTONCES el asistente explica que el reporte vive en el topic Soporte ("Reportar un problema")
+- Y NO afirma que la funcionalidad está próxima/"Próximamente"
 
 ---
 
-## Non-Goals
+## PR-B — Actualización del corpus de conocimiento + fix de raíz del enum de estados
 
-- No i18n layer — direct string-literal edits only (no framework introduced).
-- No full 18-doc corpus audit — only 009/010 deltas + the two confirmed falsehoods.
-- No intent-detection or topic-id pipeline for button placement — content-derived visibility plus a
-  manual reveal escape hatch only.
-- No app-wide voseo/tuteo normalization (`MeetingDetailsView` tuteo stays as-is).
-- No `roadmap.md` refresh (known stale — separate follow-up).
-- No change to `manage_meeting_share` behavior (tool already correct; only copy was wrong).
-- No deployment-contract file changes (`Dockerfile.*`, `docker-compose*.yml`, `railway.json`, CI).
+### Requerimiento: El corpus/STARTER_TOPICS reflejan solo la realidad de 009/010
+
+El sistema DEBE actualizar el corpus y `STARTER_TOPICS`, acotado SOLO a los deltas de 009/010: usar el
+vocabulario "dar acceso"/"acceso" (nunca "Access Grant" en la copy de usuario); afirmar "enlace de acceso
+restringido" como el único tipo de compartido y eliminar cualquier afirmación de "link público"; documentar
+las sugerencias de participantes, el bloqueo por owner desactivado, `transcription_error` + su recuperación,
+y el auto-grant a co-asistentes de ADR-0007. No se toca ningún otro doc del corpus.
+
+#### Escenario: El corpus ya no ofrece enlaces públicos
+
+- DADO que el corpus antes describía un enlace de compartido público
+- CUANDO un usuario pregunta cómo compartir una reunión
+- ENTONCES el asistente describe únicamente un "enlace de acceso restringido" (email restringido)
+- Y NO DEBE mencionar el compartido público/"link público" como opción vigente
+
+#### Escenario: El corpus refleja la recuperación de transcription_error
+
+- DADO que una reunión llegó a `transcription_error`
+- CUANDO un usuario pregunta por qué una reunión muestra un error de transcripción
+- ENTONCES el asistente explica que la grabación está a salvo y puede reprocesarse desde el storage
+
+### Requerimiento: El enum de estados de search_meetings se abastece de la lista canónica compartida
+
+El sistema DEBE exportar una lista canónica de estados de reunión desde
+`packages/shared/src/domain/meetingStatus.ts` y hacer que `searchMeetingsTool`
+(`apps/web/src/integrations/chat/tools/definitions.ts`) la consuma en lugar de un array hardcodeado, de
+modo que la tool acepte todos los estados reales, incluido `transcription_error`. *(TDD-obligatorio: el
+export del enum y su consumo — primero-el-test.)*
+
+#### Escenario: search_meetings acepta transcription_error
+
+- DADO que la tool `search_meetings` recibe un filtro de estado `transcription_error`
+- CUANDO el schema de la tool valida el argumento
+- ENTONCES `transcription_error` es un valor válido (no rechazado)
+- Y el conjunto aceptado coincide exactamente con la lista canónica de estados compartida
+
+#### Escenario: Agregar un estado no puede desalinear la tool
+
+- DADO que se agrega un nuevo estado a la lista canónica compartida
+- CUANDO `searchMeetingsTool` arma su schema
+- ENTONCES los estados aceptados por la tool incluyen el nuevo valor sin ninguna edición separada
+
+---
+
+## Objetivos no incluidos
+
+- Sin capa de i18n — solo ediciones directas de string-literals (no se introduce ningún framework).
+- Sin auditoría completa de los 18 docs del corpus — solo los deltas de 009/010 + las dos falsedades
+  confirmadas.
+- Sin detección de intención ni pipeline de topic-id para la ubicación del botón — solo visibilidad
+  derivada del contenido más una vía de escape de revelado manual.
+- Sin normalización de voseo/tuteo a nivel de toda la app (`MeetingDetailsView` se mantiene en tuteo tal
+  cual está).
+- Sin actualización de `roadmap.md` (se sabe que está desactualizado — follow-up separado).
+- Sin cambios al comportamiento de `manage_meeting_share` (la tool ya es correcta; solo la copy estaba
+  mal).
+- Sin cambios a archivos del contrato de despliegue (`Dockerfile.*`, `docker-compose*.yml`, `railway.json`,
+  CI).

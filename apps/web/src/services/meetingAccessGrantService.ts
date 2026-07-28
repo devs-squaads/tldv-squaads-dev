@@ -5,12 +5,19 @@ import { MeetingAccessGrantRepository } from "@meeting-bot/shared/repositories/M
 import type { MeetingAccessGrantRecord } from "@meeting-bot/shared/repositories/MeetingAccessGrantRepository";
 import { resolveExpiresAt } from "@/integrations/sharing/shareTtl";
 
+export type GrantAccessType = "single_use" | "temporary" | "permanent";
+
 export interface CreateGrantInput {
   callerId: string;
   meetingId: string;
   granteeUserId: string;
   ttlMinutes?: number;
   noExpiry?: boolean;
+  // 013: proposed by a Share Request approval, or picked directly by an admin. Takes
+  // priority over ttlMinutes/noExpiry above when present — see resolveExpiresAtFromAccessType.
+  accessType?: GrantAccessType;
+  expiresInDays?: number; // required when accessType === "temporary"
+  callerRole?: "admin" | "member"; // member direct-create throws; undefined = M2M unchanged
 }
 
 export interface RevokeGrantInput {
@@ -31,11 +38,33 @@ async function requireOwnedMeeting(meetingId: string, callerId: string): Promise
   return meeting;
 }
 
+// 013: accessType maps straight to an expiry, deliberately bypassing shareTtl.ts's fixed
+// TTL-menu validation (1h/1d/7d) used by the legacy ttlMinutes/noExpiry path above — Share
+// Request approvals (and admin-direct temporary grants) need any day count, per spec's
+// "temporary MUST let the Owner set any day count" requirement.
+function resolveExpiresAtFromAccessType(accessType: GrantAccessType, expiresInDays?: number): Date | null {
+  if (accessType === "single_use") {
+    throw new Error("single_use access is only available for unregistered recipients");
+  }
+  if (accessType === "permanent") {
+    return null;
+  }
+  if (!expiresInDays || expiresInDays <= 0) {
+    throw new Error("expiresInDays is required for temporary access");
+  }
+  return new Date(Date.now() + expiresInDays * 1440 * 60 * 1000);
+}
+
 export class MeetingAccessGrantService {
   static async createGrant(input: CreateGrantInput): Promise<{ id: string; expiresAt: Date | null }> {
+    if (input.callerRole === "member") {
+      throw new Error("Member owners must submit a share request for admin approval");
+    }
     const meeting = await requireOwnedMeeting(input.meetingId, input.callerId);
 
-    const expiresAt = resolveExpiresAt(input.ttlMinutes, input.noExpiry);
+    const expiresAt = input.accessType
+      ? resolveExpiresAtFromAccessType(input.accessType, input.expiresInDays)
+      : resolveExpiresAt(input.ttlMinutes, input.noExpiry);
     const now = new Date();
     const id = randomUUID();
 
@@ -67,5 +96,31 @@ export class MeetingAccessGrantService {
       throw new Error("Only the meeting owner can manage access grants");
     }
     await MeetingAccessGrantRepository.revokeById(input.grantId);
+  }
+
+  // Owner-gated, mirrors MeetingShareService.deleteShare's shape. Only a revoked/expired grant
+  // may be deleted — an active one must be revoked first.
+  static async deleteGrant(grantId: string, callerId?: string): Promise<void> {
+    const grant = await MeetingAccessGrantRepository.findById(grantId);
+    if (!grant) {
+      throw new Error("Access grant not found");
+    }
+    if (callerId !== undefined && grant.ownerId !== callerId) {
+      throw new Error("Only the meeting owner can manage access grants");
+    }
+    const isActive = !grant.revokedAt && (!grant.expiresAt || grant.expiresAt.getTime() > Date.now());
+    if (isActive) {
+      throw new Error("Only a revoked or expired access grant can be deleted");
+    }
+    await MeetingAccessGrantRepository.deleteById(grantId);
+  }
+
+  // Mirrors MeetingShareService.clearInactiveShares's shape/return type.
+  static async clearInactiveGrants(meetingId: string, callerId?: string): Promise<{ deletedCount: number }> {
+    if (callerId !== undefined) {
+      await requireOwnedMeeting(meetingId, callerId);
+    }
+    const deletedCount = await MeetingAccessGrantRepository.deleteInactiveByMeetingId(meetingId, new Date());
+    return { deletedCount };
   }
 }

@@ -187,7 +187,8 @@ bun run build:web
 | `SHARE_OTP_TTL_MINUTES`                                       | Minutos de validez del OTP emitido para verificación de acceso.                                                                                |
 | `SHARE_OTP_REQUEST_RATE_LIMIT` / `SHARE_OTP_REQUEST_WINDOW_MS`| Límite y ventana temporal para solicitudes de OTP por share/IP.                                                                                |
 | `SHARE_OTP_VERIFY_RATE_LIMIT` / `SHARE_OTP_VERIFY_WINDOW_MS`  | Límite y ventana temporal para intentos de verificación OTP por share/IP.                                                                      |
-| `EMAIL_PROVIDER`                                              | Proveedor de email usado para invitaciones, reenvíos y OTP en compartición restringida (`console` por defecto).                                |
+| `EMAIL_PROVIDER`                                              | Proveedor de email usado para invitaciones, reenvíos y OTP en compartición restringida (`console` por defecto; `smtp` habilita envío real vía `SmtpEmailProvider`).                                |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | Credenciales SMTP usadas por `SmtpEmailProvider` cuando `EMAIL_PROVIDER=smtp`. Config incompleta fuera de producción cae a log de consola; en producción bloquea el envío con un error explícito. |
 | `ROLE`                                                        | Define el rol de proceso (`web` o `worker`) para el split arquitectonico.                                                                      |
 | `IS_DOCKER`                                                   | Debe ser `true` para ejecutar worker multimedia en Linux Docker.                                                                               |
 | `PUPPETEER_EXECUTABLE_PATH`                                   | Binario de Chromium usado por el bot en Docker (en este repo se setea por Dockerfile).                                                         |
@@ -349,10 +350,17 @@ bun run build:web
 
 ## Sharing API-First (web + clientes externos)
 El proyecto expone una capa de compartición reutilizable por `meeting-web` y otros clientes (ej. extensión Chrome):
-- Tipos de share: `public` y `restricted_email`.
+- Tipo de share: `restricted_email` (el tipo `public` fue eliminado en la feature 009 — toda reunión tiene
+  un Owner único y el acceso es siempre personalizado, nunca por enlace público).
 - Caducidad opcional: si no se define TTL, el enlace no expira (`expires_at = null`).
 - En `restricted_email` se exige verificación OTP.
 - El bucket debe permanecer privado; la descarga se resuelve por signed URLs temporales.
+- Solo el Owner de la reunión puede compartir/revocar (feature 009). Si el Owner tiene rol `member`, la
+  acción crea un `Share Request` pendiente en vez de un share directo, y requiere aprobación de un `admin`
+  de la plataforma antes de generar el share/Access Grant real y enviar el email (feature 013, ADR-0008).
+  UI admin (solo `role = admin`): `GET /admin/share-requests` — lista de solicitudes pendientes con
+  aprobar/rechazar; campana de notificación con el conteo global de pendientes visible en toda página
+  autenticada.
 
 ### Endpoints principales
 - Privados (requieren `API_ROUTE_SECRET` cuando está configurado):

@@ -1,5 +1,6 @@
 import type { EmailProvider } from "@/integrations/email/EmailProvider";
 import { ConsoleEmailProvider } from "@/integrations/email/providers/ConsoleEmailProvider";
+import { SmtpEmailProvider } from "@/integrations/email/providers/SmtpEmailProvider";
 
 export class EmailProviderFactory {
   private static instance: EmailProvider;
@@ -12,6 +13,9 @@ export class EmailProviderFactory {
     switch (providerType) {
       case "console":
         this.instance = new ConsoleEmailProvider();
+        break;
+      case "smtp":
+        this.instance = new SmtpEmailProvider();
         break;
       default:
         console.warn(`[EmailProviderFactory] Unknown provider ${providerType}, defaulting to console`);

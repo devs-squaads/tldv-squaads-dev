@@ -1,79 +1,83 @@
-# Design: Auto-Join Dedup, Shared Access & Transcription Recovery
+# Diseño: Deduplicación de Auto-Join, Acceso Compartido y Recuperación de Transcripción
 
-## Technical Approach
+## Enfoque técnico
 
-Three independent root-cause fixes, each landing at the one choke point every affected code path already
-funnels through — consistent with 009's approach, not three scattered patches:
+Tres fixes de causa raíz independientes, cada uno aterrizando en el único cuello de botella por el que ya
+converge cada ruta de código afectada — consistente con el enfoque de 009, no tres parches dispersos:
 
-1. **Dedup** moves from racy application-level check-then-insert to a DB-level partial unique index +
-   `INSERT ... ON CONFLICT DO NOTHING` in `MeetingRepository`, with `queueMeetingRun` re-fetching the
-   winner on conflict. The atomic claim (`claimNextPending`, `for update skip locked`) is untouched — this
-   fixes enqueue-time duplication, not claim-time.
-2. **Co-attendee grant** is a new, narrowly-scoped write appended to `autoJoinService` right after
-   `queueMeetingRun` resolves (inserted-or-deduped), reusing `UserRepository.findByEmail` and
-   `MeetingAccessGrantRepository.create` from 009 verbatim, plus one new idempotency-check method.
-   Owner resolution itself is unchanged.
-3. **Transcription recovery** adds one enum value (`transcription_error`) treated as recoverable (not
-   terminal) in the existing state-machine module, and re-points four already-existing UI gates
-   (video, download, `canReprocess`, rollback) from `status === "completed"` to `recordingFilePath`
-   presence / status-inclusive checks — no new component, no new server action.
+1. **La deduplicación** pasa de un check-then-insert a nivel de aplicación propenso a condición de carrera,
+   a un índice único parcial a nivel de base de datos + `INSERT ... ON CONFLICT DO NOTHING` en
+   `MeetingRepository`, con `queueMeetingRun` re-consultando al ganador en caso de conflicto. El claim
+   atómico (`claimNextPending`, `for update skip locked`) queda intacto — esto corrige la duplicación en
+   tiempo de encolado, no en tiempo de claim.
+2. **El grant de co-asistente** es una escritura nueva, acotada estrechamente, agregada a `autoJoinService`
+   justo después de que `queueMeetingRun` resuelve (insertado o deduplicado), reutilizando
+   `UserRepository.findByEmail` y `MeetingAccessGrantRepository.create` de 009 tal cual, más un nuevo
+   método de verificación de idempotencia. La resolución del Owner en sí queda sin cambios.
+3. **La recuperación de transcripción** agrega un valor de enum (`transcription_error`) tratado como
+   recuperable (no terminal) en el módulo de máquina de estados existente, y re-apunta cuatro gates de UI
+   ya existentes (video, descarga, `canReprocess`, rollback) de `status === "completed"` hacia la
+   presencia de `recordingFilePath` / verificaciones inclusivas de status — sin componente nuevo, sin
+   server action nueva.
 
-## Open Technical Question — Resolved: split into two migration files
+## Pregunta técnica abierta — Resuelta: dividir en dos archivos de migración
 
-**Question:** Can the partial unique index and the new `transcription_error` enum value ship in one
-`drizzle/0007_*.sql`, given Postgres forbids `ALTER TYPE ... ADD VALUE` and using that value in the same
-transaction?
+**Pregunta:** ¿Pueden el índice único parcial y el nuevo valor de enum `transcription_error` salir en un
+solo `drizzle/0007_*.sql`, dado que Postgres prohíbe `ALTER TYPE ... ADD VALUE` y usar ese valor en la
+misma transacción?
 
-**Finding:** This repo's existing enum-add-value precedent, `drizzle/0001_add_rejected_status.sql`, is a
-single-statement file containing only `ALTER TYPE "public"."meeting_status" ADD VALUE IF NOT EXISTS
-'rejected';` — isolated from every other migration, even though nothing else in that migration batch
-referenced the new value. `drizzle/0006_meeting_ownership_and_sharing.sql` shows this repo's migration
-runner executes each numbered file's statements (separated by `--> statement-breakpoint`) together, and
-`0001`'s isolation is the only prior data point for how this repo treats `ADD VALUE`. Nothing in this
-change needs the partial unique index and the enum value to co-occur — they are unrelated schema objects
-touching different tables — so there is no correctness requirement to combine them, and the safe,
-convention-consistent choice is to keep the isolation precedent for `ADD VALUE` migrations.
+**Hallazgo:** El precedente ya existente en este repo para agregar valores de enum,
+`drizzle/0001_add_rejected_status.sql`, es un archivo de una sola sentencia que contiene únicamente `ALTER
+TYPE "public"."meeting_status" ADD VALUE IF NOT EXISTS 'rejected';` — aislado de cualquier otra migración,
+aun cuando nada más en ese batch de migración referenciaba el valor nuevo. `drizzle/0006_meeting_ownership_and_sharing.sql`
+muestra que el runner de migraciones de este repo ejecuta juntas las sentencias de cada archivo numerado
+(separadas por `--> statement-breakpoint`), y el aislamiento de `0001` es el único dato previo sobre cómo
+este repo trata `ADD VALUE`. Nada en este cambio necesita que el índice único parcial y el valor de enum
+coexistan — son objetos de schema no relacionados que tocan tablas distintas — así que no hay ningún
+requisito de corrección para combinarlos, y la opción segura y consistente con la convención es mantener el
+precedente de aislamiento para migraciones `ADD VALUE`.
 
-**Decision:** Split into two files:
-- `drizzle/0007_meeting_dedup_index.sql` — partial unique index only.
-- `drizzle/0008_transcription_error_status.sql` — `ALTER TYPE "public"."meeting_status" ADD VALUE IF NOT
-  EXISTS 'transcription_error';` only, mirroring `0001`'s shape exactly.
+**Decisión:** Dividir en dos archivos:
+- `drizzle/0007_meeting_dedup_index.sql` — solo el índice único parcial.
+- `drizzle/0008_transcription_error_status.sql` — solo `ALTER TYPE "public"."meeting_status" ADD VALUE IF
+  NOT EXISTS 'transcription_error';`, reflejando exactamente la forma de `0001`.
 
-This also sidesteps any ambiguity about whether this repo's runner wraps a whole file in one transaction
-(if it does, combining would be a hard Postgres error the moment anything in the same file referenced the
-new value — moot here, but not worth introducing as a precedent) or not.
+Esto también evita cualquier ambigüedad sobre si el runner de este repo envuelve un archivo completo en
+una sola transacción (si lo hace, combinar produciría un error duro de Postgres en el momento en que algo
+del mismo archivo referenciara el valor nuevo — discutible acá, pero no vale la pena introducirlo como
+precedente) o no.
 
-## Architecture Decisions
+## Decisiones de arquitectura
 
-| Decision | Choice | Alternatives considered | Rationale |
+| Decisión | Elección | Alternativas consideradas | Justificación |
 |---|---|---|---|
-| Migration file split | Two files, `0007` (index) + `0008` (enum value), matching `0001`'s isolation precedent | One combined `0007` | No correctness requirement to combine; matches this repo's only prior `ADD VALUE` precedent instead of inventing a new pattern |
-| Dedup enforcement point | DB-level partial unique index + `ON CONFLICT DO NOTHING`, arbiter logic inside `MeetingRepository` | Advisory lock in `queueMeetingRun`; app-level re-check-before-insert (today's racy approach) | Root-cause fix per AGENTS.md — DB constraint is the only mechanism immune to two processes racing between check and insert; `MeetingRepository` already owns every other query-shape concern (mirrors `findBySourceEvent`, `insert`), keeping `queueMeetingRun` free of SQL/conflict-target details |
-| Conflict-target construction | Drizzle query builder `.onConflictDoNothing({ target: [...], where: isNotNull(...) })`, not raw SQL | Raw `db.execute(sql\`INSERT ... ON CONFLICT ...\`)` | Every other repository method in this file uses the query builder; raw SQL would be the only exception for no correctness gain — Postgres requires the arbiter's `where` to match the partial index's predicate exactly regardless of which drizzle API constructs it |
-| `queueMeetingRun` return shape | Extend to `{ id: string; ownerId: string }` | Have `autoJoinService` re-fetch the meeting by id to learn the winning `ownerId` | The repository methods already have the winning row (freshly inserted or re-fetched-on-conflict) in hand; returning it avoids a second round-trip and keeps `autoJoinService` from needing to know about `MeetingRepository` at all |
-| Co-attendee grant idempotency check | New `MeetingAccessGrantRepository.existsForMeetingAndGrantee(meetingId, granteeUserId)` — "any row at all", ignoring `revokedAt` | Reuse `findLiveGrant` (checks `revokedAt IS NULL`) | Spec requires a manually revoked grant to stay revoked; `findLiveGrant`'s semantics are the wrong question (checks "is currently live", not "was ever created") — a distinct method keeps both queries honest about what they answer |
-| Grant creation location | Inline in `autoJoinPollAndEnqueue`'s per-event loop, right after `queueMeetingRun` resolves | New `AutoJoinGrantService` module | YAGNI — one loop, two repository calls, no branching complexity that justifies a new file; mirrors how owner resolution already lives inline in the same function |
-| `transcription_error` bucket | Own bucket alongside `error`/`rejected` (actionable, not `ACTIVE_PROCESSING_STATUSES`), but recoverable in `ALLOWED_TRANSITIONS` (unlike `error`/`rejected`, which only recover via `pending`) | Add to `ACTIVE_PROCESSING_STATUSES` (would spuriously trigger the dashboard's polling `setInterval`) | The recording is done; only the transcript/summary needs another pass, so it should behave like a resolved-but-actionable state, not an in-progress one |
-| Video/download/`canReprocess` gating | Switch to `meeting.recordingFilePath` truthiness (video/download) and explicit status-set checks (`canReprocess`) instead of `status === "completed"` | Add `transcription_error` as a parallel `||` branch everywhere `completed` appears | Truthiness-on-file-presence is the actual invariant the UI cares about ("is there a video to show"), and is already correct for any future recoverable-with-video status without another `||` branch |
-| Rollback status on failed reprocess | Capture `meeting.status` at the moment `handleReprocess` starts (before the optimistic `"transcribing"` set), restore that captured value on failure | Keep hardcoded `"completed"` and add an `if` for `transcription_error` | A captured pre-optimistic value is correct for both existing callers of `canReprocess` (`completed` and now `transcription_error`) with one line, not two hardcoded branches that must be kept in sync |
+| División de archivos de migración | Dos archivos, `0007` (índice) + `0008` (valor de enum), siguiendo el precedente de aislamiento de `0001` | Un `0007` combinado | No hay requisito de corrección para combinar; coincide con el único precedente previo de `ADD VALUE` de este repo en vez de inventar un patrón nuevo |
+| Punto de aplicación de la deduplicación | Índice único parcial a nivel de DB + `ON CONFLICT DO NOTHING`, lógica de árbitro dentro de `MeetingRepository` | Lock advisory en `queueMeetingRun`; re-chequeo a nivel de aplicación antes de insertar (el enfoque propenso a condición de carrera de hoy) | Fix de causa raíz según AGENTS.md — la restricción de DB es el único mecanismo inmune a que dos procesos compitan entre el check y el insert; `MeetingRepository` ya posee cualquier otra preocupación de forma de query (refleja `findBySourceEvent`, `insert`), manteniendo a `queueMeetingRun` libre de detalles de SQL/conflict-target |
+| Construcción del conflict-target | Query builder de Drizzle `.onConflictDoNothing({ target: [...], where: isNotNull(...) })`, no SQL crudo | SQL crudo `db.execute(sql\`INSERT ... ON CONFLICT ...\`)` | Cualquier otro método de repositorio en este archivo usa el query builder; SQL crudo sería la única excepción sin ninguna ganancia de corrección — Postgres requiere que el `where` del árbitro coincida exactamente con el predicado del índice parcial sin importar qué API de drizzle lo construya |
+| Forma del retorno de `queueMeetingRun` | Extenderlo a `{ id: string; ownerId: string }` | Que `autoJoinService` re-consulte la reunión por id para conocer el `ownerId` ganador | Los métodos de repositorio ya tienen a mano la fila ganadora (recién insertada o re-consultada por conflicto); devolverla evita un segundo round-trip y evita que `autoJoinService` necesite conocer nada de `MeetingRepository` |
+| Verificación de idempotencia del grant de co-asistente | Nuevo `MeetingAccessGrantRepository.existsForMeetingAndGrantee(meetingId, granteeUserId)` — "cualquier fila en absoluto", ignorando `revokedAt` | Reutilizar `findLiveGrant` (verifica `revokedAt IS NULL`) | La spec requiere que un grant revocado manualmente siga revocado; la semántica de `findLiveGrant` es la pregunta equivocada (verifica "¿está vivo actualmente?", no "¿alguna vez se creó?") — un método distinto mantiene a ambas queries honestas sobre lo que responden |
+| Ubicación de la creación del grant | Inline en el loop por-evento de `autoJoinPollAndEnqueue`, justo después de que `queueMeetingRun` resuelve | Módulo nuevo `AutoJoinGrantService` | YAGNI — un loop, dos llamadas a repositorio, sin complejidad de branching que justifique un archivo nuevo; refleja cómo la resolución del owner ya vive inline en la misma función |
+| Grupo de `transcription_error` | Grupo propio junto a `error`/`rejected` (accionable, no `ACTIVE_PROCESSING_STATUSES`), pero recuperable en `ALLOWED_TRANSITIONS` (a diferencia de `error`/`rejected`, que solo se recuperan vía `pending`) | Agregarlo a `ACTIVE_PROCESSING_STATUSES` (dispararía espuriamente el `setInterval` de polling del dashboard) | La grabación ya está lista; solo la transcripción/resumen necesita otra pasada, así que debería comportarse como un estado resuelto-pero-accionable, no uno en progreso |
+| Gating de video/descarga/`canReprocess` | Cambiar a truthiness de `meeting.recordingFilePath` (video/descarga) y verificaciones explícitas de conjunto de status (`canReprocess`) en vez de `status === "completed"` | Agregar `transcription_error` como una rama `||` paralela en todos lados donde aparece `completed` | La truthiness sobre la presencia del archivo es el invariante real que le importa a la UI ("¿hay un video para mostrar?"), y ya es correcta para cualquier futuro status recuperable-con-video sin otra rama `||` |
+| Status de rollback en un reprocesamiento fallido | Capturar `meeting.status` en el momento en que `handleReprocess` arranca (antes del set optimista a `"transcribing"`), restaurar ese valor capturado en caso de fallo | Mantener `"completed"` hardcodeado y agregar un `if` para `transcription_error` | Un valor pre-optimista capturado es correcto para ambos llamadores existentes de `canReprocess` (`completed` y ahora `transcription_error`) con una sola línea, no dos ramas hardcodeadas que hay que mantener sincronizadas |
 
-## Data Flow
+## Flujo de datos
 
-    Auto-join poll (worker/src/services/autoJoinService.ts, ~60s + /internal/auto-join/poll)
+    Poll de auto-join (worker/src/services/autoJoinService.ts, ~60s + /internal/auto-join/poll)
       │
       ▼
     queueMeetingRun({ sourceProvider, sourceEventId, ownerId: event.ownerUserId, ... })
       │
-      ├─ sourceProvider && sourceEventId set ──▶ MeetingRepository.insertDedupedBySourceEvent(values)
+      ├─ sourceProvider && sourceEventId seteados ──▶ MeetingRepository.insertDedupedBySourceEvent(values)
       │                                            │
       │                                            ├─ INSERT ... ON CONFLICT (source_provider, source_event_id)
       │                                            │   WHERE source_event_id IS NOT NULL DO NOTHING RETURNING *
       │                                            │
-      │                                            ├─ row returned ──▶ this call won the race
-      │                                            └─ no row ──▶ findBySourceEvent(...) ──▶ winner's row
-      │                                            (either way: { id, ownerId } of the ONE persisted row)
+      │                                            ├─ se devuelve fila ──▶ esta llamada ganó la carrera
+      │                                            └─ sin fila ──▶ findBySourceEvent(...) ──▶ fila del ganador
+      │                                            (en cualquier caso: { id, ownerId } de la ÚNICA fila persistida)
       │
-      └─ manual paths (no sourceEventId) ──▶ existing dedupe-window + plain insert, unchanged
+      └─ rutas manuales (sin sourceEventId) ──▶ ventana de deduplicación existente + insert plano, sin cambios
 
     { id: meetingId, ownerId: resolvedOwnerId } = queueMeetingRun(...)
       │
@@ -84,39 +88,39 @@ new value — moot here, but not worth introducing as a precedent) or not.
         ──▶ MeetingAccessGrantRepository.existsForMeetingAndGrantee(meetingId, user.id)
               false ──▶ MeetingAccessGrantRepository.create({ meetingId, ownerId: resolvedOwnerId,
                           granteeUserId: user.id, expiresAt: null, revokedAt: null })
-              true  ──▶ skip (already granted, or deliberately revoked — never re-created)
+              true  ──▶ omitir (ya otorgado, o deliberadamente revocado — nunca se recrea)
 
-    Worker AI phase throws (meetingWorkerService.ts, AFTER upload succeeded)
-      ──▶ status: "transcription_error" (was "error")
-    Worker join/record phase throws (no video ever produced)
-      ──▶ status: "error" (unchanged)
+    La fase de IA del worker lanza excepción (meetingWorkerService.ts, DESPUÉS de que el upload tuvo éxito)
+      ──▶ status: "transcription_error" (antes "error")
+    La fase de unión/grabación del worker lanza excepción (nunca se produjo ningún video)
+      ──▶ status: "error" (sin cambios)
 
-    MeetingDetailsView renders:
-      recordingFilePath truthy ──▶ video player + MP4 download shown (any status)
-      status ∈ {completed, transcription_error} && (missing transcript/summary) && recordingFilePath
-        ──▶ canReprocess ──▶ handleReprocess ──▶ reprocessMeetingAction (unchanged, storage-based retry)
-      status ∈ {rejected, error} (NOT transcription_error) ──▶ retryMeetingAction (destructive full rejoin)
+    MeetingDetailsView renderiza:
+      recordingFilePath truthy ──▶ reproductor de video + descarga MP4 mostrados (cualquier status)
+      status ∈ {completed, transcription_error} && (falta transcripción/resumen) && recordingFilePath
+        ──▶ canReprocess ──▶ handleReprocess ──▶ reprocessMeetingAction (sin cambios, reintento basado en almacenamiento)
+      status ∈ {rejected, error} (NO transcription_error) ──▶ retryMeetingAction (reunión completa nueva, destructiva)
 
-    DashboardClient: transcription_error folds into "Con Error" filter tab, renders with "warning" badge
-      (not "destructive") — recording is fine, only post-processing needs a retry.
+    DashboardClient: transcription_error se pliega dentro de la pestaña de filtro "Con Error", renderiza con badge "warning"
+      (no "destructive") — la grabación está bien, solo el post-procesamiento necesita un reintento.
 
-## File Changes
+## Cambios de archivos
 
-| File | Action | Description |
+| Archivo | Acción | Descripción |
 |---|---|---|
-| `packages/shared/src/db/schema.ts` | Modify | `meetingStatusEnum` gains `"transcription_error"` (order after `"error"`, before `"rejected"` is irrelevant to Postgres enums but kept adjacent to `"error"` for readability); add partial unique index on `meetings(sourceProvider, sourceEventId)` via `.enableRLS()`-style `index()` builder with `.where(...)` |
-| `drizzle/0007_meeting_dedup_index.sql` | Create | `CREATE UNIQUE INDEX ... ON "meetings" ("source_provider", "source_event_id") WHERE "source_event_id" IS NOT NULL;` |
-| `drizzle/0008_transcription_error_status.sql` | Create | `ALTER TYPE "public"."meeting_status" ADD VALUE IF NOT EXISTS 'transcription_error';` (mirrors `0001`) |
-| `packages/shared/src/repositories/MeetingRepository.ts` | Modify | New `insertDedupedBySourceEvent(values): Promise<MeetingRecord>` — `onConflictDoNothing` + refetch-on-conflict |
-| `packages/shared/src/services/meetingQueueService.ts` | Modify | `queueMeetingRun` return type becomes `{ id: string; ownerId: string }`; source-event branch calls `insertDedupedBySourceEvent` instead of `findBySourceEvent` + `insert` |
-| `packages/shared/src/repositories/MeetingAccessGrantRepository.ts` | Modify | New `existsForMeetingAndGrantee(meetingId, granteeUserId): Promise<boolean>` |
-| `apps/worker/src/services/autoJoinService.ts` | Modify | After `queueMeetingRun` resolves: loop `event.participantEmails`, resolve via `UserRepository.findByEmail`, skip `Owner`/unregistered/already-granted, create grant |
-| `packages/shared/src/domain/meetingStatus.ts` | Modify | `MeetingStatus` union, `ALLOWED_TRANSITIONS`, `MEETING_STATUS_LABELS_ES` gain `transcription_error`; `ACTIVE_PROCESSING_STATUSES` unchanged (does NOT include it) |
-| `apps/worker/src/services/meetingWorkerService.ts` | Modify | Inner AI-phase catch block (~line 165-173) sets `status: "transcription_error"` instead of `"error"`; outer catch (~174-193, join/record failures) unchanged |
-| `apps/web/src/components/MeetingDetailsView.tsx` | Modify | Video gate (~703) and MP4 download gate (~656) switch from `status === "completed"` to `meeting.recordingFilePath` truthy; `canReprocess` (~116) adds `transcription_error`; `handleReprocess` (~118-133) captures pre-optimistic status for rollback instead of hardcoding `"completed"` |
-| `apps/web/src/components/DashboardClient.tsx` | Modify | `getStatusVariant` (~40-50) returns `"warning"` for `transcription_error`; filter predicate (~85-89) folds `transcription_error` into the `"error"` tab alongside `m.status === "error"` |
+| `packages/shared/src/db/schema.ts` | Modificar | `meetingStatusEnum` gana `"transcription_error"` (el orden después de `"error"`, antes de `"rejected"`, es irrelevante para los enums de Postgres pero se mantiene adyacente a `"error"` por legibilidad); agregar índice único parcial en `meetings(sourceProvider, sourceEventId)` vía el builder `index()` al estilo `.enableRLS()` con `.where(...)` |
+| `drizzle/0007_meeting_dedup_index.sql` | Crear | `CREATE UNIQUE INDEX ... ON "meetings" ("source_provider", "source_event_id") WHERE "source_event_id" IS NOT NULL;` |
+| `drizzle/0008_transcription_error_status.sql` | Crear | `ALTER TYPE "public"."meeting_status" ADD VALUE IF NOT EXISTS 'transcription_error';` (refleja a `0001`) |
+| `packages/shared/src/repositories/MeetingRepository.ts` | Modificar | Nuevo `insertDedupedBySourceEvent(values): Promise<MeetingRecord>` — `onConflictDoNothing` + re-consulta en caso de conflicto |
+| `packages/shared/src/services/meetingQueueService.ts` | Modificar | El tipo de retorno de `queueMeetingRun` pasa a ser `{ id: string; ownerId: string }`; la rama de source-event llama a `insertDedupedBySourceEvent` en vez de `findBySourceEvent` + `insert` |
+| `packages/shared/src/repositories/MeetingAccessGrantRepository.ts` | Modificar | Nuevo `existsForMeetingAndGrantee(meetingId, granteeUserId): Promise<boolean>` |
+| `apps/worker/src/services/autoJoinService.ts` | Modificar | Después de que `queueMeetingRun` resuelve: loop sobre `event.participantEmails`, resolver vía `UserRepository.findByEmail`, omitir `Owner`/no-registrado/ya-otorgado, crear grant |
+| `packages/shared/src/domain/meetingStatus.ts` | Modificar | La unión `MeetingStatus`, `ALLOWED_TRANSITIONS` y `MEETING_STATUS_LABELS_ES` ganan `transcription_error`; `ACTIVE_PROCESSING_STATUSES` sin cambios (NO lo incluye) |
+| `apps/worker/src/services/meetingWorkerService.ts` | Modificar | El bloque catch interno de la fase de IA (~línea 165-173) setea `status: "transcription_error"` en vez de `"error"`; el catch externo (~174-193, fallos de unión/grabación) sin cambios |
+| `apps/web/src/components/MeetingDetailsView.tsx` | Modificar | El gate de video (~703) y el gate de descarga MP4 (~656) cambian de `status === "completed"` a `meeting.recordingFilePath` truthy; `canReprocess` (~116) agrega `transcription_error`; `handleReprocess` (~118-133) captura el status pre-optimista para el rollback en vez de hardcodear `"completed"` |
+| `apps/web/src/components/DashboardClient.tsx` | Modificar | `getStatusVariant` (~40-50) devuelve `"warning"` para `transcription_error`; el predicado de filtro (~85-89) pliega `transcription_error` dentro de la pestaña `"error"` junto con `m.status === "error"` |
 
-## Interfaces / Contracts
+## Interfaces / Contratos
 
 ```typescript
 // packages/shared/src/repositories/MeetingRepository.ts
@@ -296,7 +300,7 @@ function getStatusVariant(status: MeetingStatus) {
 (statusFilter === "error" && (m.status === "error" || m.status === "transcription_error")) ||
 ```
 
-## Schema (Drizzle)
+## Esquema (Drizzle)
 
 ```typescript
 export const meetingStatusEnum = pgEnum("meeting_status", [
@@ -313,13 +317,13 @@ export const meetings = pgTable("meetings", {
 ]).enableRLS();
 ```
 
-Note: `pgTable`'s callback-array form is how this schema already expresses per-table index/constraint
-builders (unique + partial). If drizzle-kit's generated DDL for a partial *unique* index differs from a
-hand-written `CREATE UNIQUE INDEX ... WHERE ...`, the hand-written SQL in `0007` is the source of truth —
-`schema.ts` only needs to describe the same constraint so future `drizzle-kit generate` diffs don't
-re-propose it.
+Nota: la forma de callback-array de `pgTable` es cómo este schema ya expresa los builders de
+índice/constraint por tabla (único + parcial). Si el DDL generado por drizzle-kit para un índice *único*
+parcial difiere de un `CREATE UNIQUE INDEX ... WHERE ...` escrito a mano, el SQL escrito a mano en `0007`
+es la fuente de verdad — `schema.ts` solo necesita describir la misma restricción para que futuros diffs de
+`drizzle-kit generate` no la vuelvan a proponer.
 
-### Migration SQL
+### SQL de migración
 
 ```sql
 -- drizzle/0007_meeting_dedup_index.sql
@@ -332,55 +336,61 @@ WHERE "source_event_id" IS NOT NULL;
 ALTER TYPE "public"."meeting_status" ADD VALUE IF NOT EXISTS 'transcription_error';
 ```
 
-## Testing Strategy (TDD — RED test required for every logic item below; UI/multimedia exempt per AGENTS.md)
+## Estrategia de testing (TDD — se requiere test RED para cada ítem de lógica abajo; UI/multimedia exenta según AGENTS.md)
 
-| Layer | What to test | RED test location | DB requirement |
+| Capa | Qué testear | Ubicación del test RED | Requisito de DB |
 |---|---|---|---|
-| Dedup race on `queueMeetingRun` | Two concurrent calls for the same `(sourceProvider, sourceEventId)` insert exactly one row; loser returns winner's `{ id, ownerId }` | Extend `apps/__tests__/shared/services/meeting-queue-service.test.ts` — NEW `describe.skipIf(!dbAvailable)` block using `createLiveConnection` (mirrors `meeting-access-grant-repository.test.ts`) | **Live Postgres** — a mocked `MeetingRepository` cannot exercise a real unique-index race; this is the exact scenario the spec calls out |
-| Manually-enqueued meetings exempt from the index | Two null-`sourceEventId` inserts both persist | Same new live-DB block | Live Postgres |
-| `insertDedupedBySourceEvent` conflict → refetch path | Given a pre-existing row, calling it again returns that row without a second insert | Same new live-DB block (single scenario covers both the repository method and the service) | Live Postgres |
-| `queueMeetingRun` non-source-event branches unaffected | Existing 3 mocked tests keep passing with widened `{ id, ownerId }` return type | `apps/__tests__/shared/services/meeting-queue-service.test.ts` (existing mocked `describe`) — extend assertions to also check `result.ownerId` | Mocked (unchanged pattern) |
-| `existsForMeetingAndGrantee` idempotency | No row → `false`; any row (even `revokedAt` set) → `true` | Extend `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts` — NEW test cases in the existing `describe.skipIf(!dbAvailable)` block | **Live Postgres** — same rationale as the dedup test: this method's whole purpose is "does a row exist regardless of state", best proven against a real table, not a mock that trivially returns what it's told |
-| `autoJoinService` co-attendee grant creation | Non-owner registered attendee gets a grant; unregistered attendee and Owner are skipped; repeated poll doesn't duplicate; revoked grant isn't resurrected | Extend `apps/__tests__/worker/shared/auto-join-service.test.ts` — mock `UserRepository`, `MeetingAccessGrantRepository`, and `queueMeetingRun` (now returning `{ id, ownerId }`) | Mocked (matches this file's existing pattern; the idempotency semantics themselves are proven at the repository layer above, not re-derived here) |
-| `meetingStatus` union/transitions/label/active-set | `transcription_error` is recoverable (`canTransitionStatus("transcription_error", "completed")` true); NOT in `ACTIVE_PROCESSING_STATUSES`; label is `"Error de transcripción"` | Extend `apps/__tests__/web/shared/meeting-status.test.ts` (the real existing file — NOT the `shared/domain/...` path implied by spec.md, which doesn't exist in this repo) | N/A (pure function) |
-| `meetingWorkerService` AI-phase catch | Given upload succeeded, AI phase throws → status `transcription_error`, not `error`; join/record failure (outer catch) still yields `error` | Extend `apps/__tests__/worker/services/meeting-worker-service.test.ts` | Mocked (matches this file's existing pattern) |
-| Exempt (UI/multimedia, per AGENTS.md) | `MeetingDetailsView.tsx` gating conditions, `DashboardClient.tsx` badge variant/filter — no test file exists for either component today; adding one is out of scope for this bug-fix change (pre-existing gap, not introduced here) | Manual/integration validation only |
+| Condición de carrera de deduplicación en `queueMeetingRun` | Dos llamadas concurrentes para el mismo `(sourceProvider, sourceEventId)` insertan exactamente una fila; el perdedor devuelve el `{ id, ownerId }` del ganador | Extender `apps/__tests__/shared/services/meeting-queue-service.test.ts` — bloque NUEVO `describe.skipIf(!dbAvailable)` usando `createLiveConnection` (refleja a `meeting-access-grant-repository.test.ts`) | **Postgres en vivo** — un `MeetingRepository` mockeado no puede ejercitar una condición de carrera real sobre un índice único; este es exactamente el escenario que señala la spec |
+| Reuniones encoladas manualmente exentas del índice | Dos inserts con `sourceEventId` nulo persisten ambos | El mismo bloque nuevo de live-DB | Postgres en vivo |
+| Ruta de conflicto → re-consulta de `insertDedupedBySourceEvent` | Dada una fila preexistente, volver a llamarlo devuelve esa fila sin un segundo insert | El mismo bloque nuevo de live-DB (un solo escenario cubre tanto el método de repositorio como el servicio) | Postgres en vivo |
+| Ramas no-source-event de `queueMeetingRun` sin afectar | Los 3 tests mockeados existentes siguen pasando con el tipo de retorno `{ id, ownerId }` ensanchado | `apps/__tests__/shared/services/meeting-queue-service.test.ts` (`describe` mockeado existente) — extender las aserciones para también verificar `result.ownerId` | Mockeado (patrón sin cambios) |
+| Idempotencia de `existsForMeetingAndGrantee` | Sin fila → `false`; cualquier fila (incluso con `revokedAt` seteado) → `true` | Extender `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts` — casos de test NUEVOS en el bloque `describe.skipIf(!dbAvailable)` existente | **Postgres en vivo** — misma justificación que el test de deduplicación: el propósito entero de este método es "¿existe una fila sin importar el estado?", mejor probado contra una tabla real, no un mock que trivialmente devuelve lo que se le indica |
+| Creación de grant de co-asistente en `autoJoinService` | Un asistente registrado que no es owner recibe un grant; el asistente no registrado y el Owner se omiten; un poll repetido no duplica; un grant revocado no se resucita | Extender `apps/__tests__/worker/shared/auto-join-service.test.ts` — mockear `UserRepository`, `MeetingAccessGrantRepository` y `queueMeetingRun` (ahora devolviendo `{ id, ownerId }`) | Mockeado (coincide con el patrón existente de este archivo; la semántica de idempotencia en sí ya está probada en la capa de repositorio arriba, no se re-deriva acá) |
+| Unión/transiciones/label/active-set de `meetingStatus` | `transcription_error` es recuperable (`canTransitionStatus("transcription_error", "completed")` es `true`); NO está en `ACTIVE_PROCESSING_STATUSES`; el label es `"Error de transcripción"` | Extender `apps/__tests__/web/shared/meeting-status.test.ts` (el archivo real existente — NO la ruta `shared/domain/...` implicada por spec.md, que no existe en este repo) | N/A (función pura) |
+| Catch de fase de IA en `meetingWorkerService` | Dado que el upload tuvo éxito, la fase de IA lanza excepción → status `transcription_error`, no `error`; un fallo de unión/grabación (catch externo) sigue produciendo `error` | Extender `apps/__tests__/worker/services/meeting-worker-service.test.ts` | Mockeado (coincide con el patrón existente de este archivo) |
+| Exenta (UI/multimedia, según AGENTS.md) | Condiciones de gating de `MeetingDetailsView.tsx`, variante de badge/filtro de `DashboardClient.tsx` — no existe archivo de test para ninguno de los dos componentes hoy; agregar uno está fuera de alcance para este cambio de corrección de bugs (gap preexistente, no introducido acá) | Solo validación manual/de integración |
 
-Two tests **require the live-DB pattern** (`createLiveConnection` + `describe.skipIf(!dbAvailable)`), not a
-mocked module, per this repo's established precedent and the Bun `mock.module()` first-registration-wins
-gotcha that already broke CI once this session:
+Dos tests **requieren el patrón live-DB** (`createLiveConnection` + `describe.skipIf(!dbAvailable)`), no un
+módulo mockeado, según el precedente ya establecido de este repo y la trampa de `mock.module()` de Bun de
+"gana el primer registro" que ya rompió CI una vez en esta sesión:
 
-1. The dedup race test on `queueMeetingRun` (`meeting-queue-service.test.ts`) — a real unique-index
-   conflict cannot be simulated by a mock that just returns whatever the test tells it to.
-2. The new `existsForMeetingAndGrantee` idempotency test (`meeting-access-grant-repository.test.ts`) — same
-   reasoning; the method's contract is entirely about real row state.
+1. El test de condición de carrera de deduplicación en `queueMeetingRun` (`meeting-queue-service.test.ts`)
+   — un conflicto real de índice único no puede simularse con un mock que simplemente devuelve lo que el
+   test le indica.
+2. El nuevo test de idempotencia de `existsForMeetingAndGrantee` (`meeting-access-grant-repository.test.ts`)
+   — misma razón; el contrato del método es enteramente sobre el estado real de las filas.
 
-## Threat Matrix
+## Matriz de amenazas
 
-N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or
-process-integration boundary introduced by this change. The new auto-grant write is scoped narrowly (see
-Non-Goals in spec.md) and reuses 009's existing `meeting_access_grants` write path and RLS posture.
+N/A — este cambio no introduce routing, shell, subproceso, automatización de VCS/PR, clasificación de
+archivos ejecutables, ni ningún límite de integración de procesos. La nueva escritura de auto-grant está
+acotada estrechamente (ver No-objetivos en spec.md) y reutiliza la ruta de escritura de
+`meeting_access_grants` existente de 009 y su postura de RLS.
 
-## Migration / Rollout
+## Migración / Rollout
 
-Two migrations, `drizzle/0007_meeting_dedup_index.sql` and `drizzle/0008_transcription_error_status.sql`,
-applied in order. No backfill: pre-existing duplicate `meetings` rows for the same
-`(sourceProvider, sourceEventId)` (if any exist in current data) would make `0007` fail to create the
-unique index — per this repo's Migration Note precedent (009 also assumed a DB reset alongside its
-migration for test data), this is expected to run against a reset/clean dataset. Pre-existing `error` rows
-are not retroactively reclassified to `transcription_error` (explicit non-goal in spec.md).
+Dos migraciones, `drizzle/0007_meeting_dedup_index.sql` y `drizzle/0008_transcription_error_status.sql`,
+aplicadas en orden. Sin backfill: filas `meetings` duplicadas preexistentes para el mismo `(sourceProvider,
+sourceEventId)` (si existieran en los datos actuales) harían que `0007` falle al crear el índice único —
+según el precedente de la Nota de migración de este repo (009 también asumió un reset de DB junto con su
+migración para datos de test), se espera que esto corra contra un dataset reseteado/limpio. Las filas
+`error` preexistentes no se reclasifican retroactivamente a `transcription_error` (no-objetivo explícito en
+spec.md).
 
-## Review-Workload Forecast
+## Pronóstico de carga de revisión
 
-Per this repo's 009 precedent, the changed-lines forecast and chained-PR split (if the 400-line threshold
-is crossed) are carried in `tasks.md`, not `plan.md` — 009's `plan.md` does not contain that section;
-009's `tasks.md` does. This design intentionally leaves that forecast for the tasks phase to keep the same
-convention. A rough scope signal for the tasks-phase forecast: three independently testable problem areas
-(dedup, auto-grant, transcription recovery), each touching 2-4 files with small, mechanical diffs (no new
-components, no new services) — likely well under the 400-line chained-PR threshold as a single PR, but the
-tasks phase should confirm against actual line counts once diffs are written.
+Según el precedente de 009 en este repo, el pronóstico de líneas cambiadas y la división en chained-PR (si
+se cruza el umbral de 400 líneas) se lleva en `tasks.md`, no en `plan.md` — el `plan.md` de 009 no contiene
+esa sección; el `tasks.md` de 009 sí. Este diseño deja deliberadamente ese pronóstico para la fase de
+tasks, para mantener la misma convención. Una señal aproximada de alcance para el pronóstico de la fase de
+tasks: tres áreas de problema testeables de forma independiente (deduplicación, auto-grant, recuperación de
+transcripción), cada una tocando 2-4 archivos con diffs pequeños y mecánicos (sin componentes nuevos, sin
+servicios nuevos) — probablemente bien por debajo del umbral de 400 líneas de chained-PR como un solo PR,
+pero la fase de tasks debería confirmarlo contra los conteos de líneas reales una vez que los diffs estén
+escritos.
 
-## Open Questions
+## Preguntas abiertas
 
-None. The one open item flagged by the spec-writing agent (migration file split for the partial unique
-index vs. the additive enum value) is resolved above — two files, matching the `0001` isolation precedent.
+Ninguna. El único ítem abierto señalado por el agente que escribió la spec (división de archivos de
+migración para el índice único parcial vs. el valor de enum aditivo) está resuelto arriba — dos archivos,
+siguiendo el precedente de aislamiento de `0001`.

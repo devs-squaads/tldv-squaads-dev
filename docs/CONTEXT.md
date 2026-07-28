@@ -79,8 +79,12 @@ _Avoid_: organizer (es `organizerEmail`, un campo de calendario distinto), creat
 Fila en `meeting_access_grants` que le da a un `users.id` concreto (`granteeUserId`) permiso de lectura
 sobre una reunión de otro `Owner`, con `expiresAt` opcional. Tabla nueva, separada de `meeting_shares`
 (esa es para visitantes anónimos por token/OTP; `Access Grant` es siempre un usuario registrado con
-`Session Auth`). Solo el `Owner` puede crear o revocar grants de su reunión — un `grantee` no puede
-re-compartir (no hay cadenas de compartido).
+`Session Auth`). Un `grantee` no puede re-compartir (no hay cadenas de compartido).
+Quién puede crearlo/revocarlo depende del rol del `Owner` en `Authorized Account`: si es `admin`, lo hace
+directo. Si es `member`, pasa primero por un `Share Request` — cualquier `admin` de la plataforma (no
+necesariamente invitado a esa reunión) lo aprueba o rechaza; recién al aprobarse se crea el `Access Grant`
+real. Esto reemplaza la regla original de 009 ("solo el Owner, sin excepciones") — ver ADR pendiente sobre
+esta excepción de rol.
 _Avoid_: share (ambiguo con `meeting_shares`, el mecanismo externo), permission (genérico).
 
 **Participant**:
@@ -104,3 +108,51 @@ salió sorteado por una carrera de pollers, no por elección. Para reuniones man
 siendo solo sugerencia (sin cambios).
 _Avoid_: usar "Access Grant" a secas para este caso sin aclarar que es la excepción automática — el
 `Access Grant` normal siempre lo dispara el `Owner`.
+
+# Asistente
+
+El chat embebido en la web app y su superficie de soporte.
+
+## Language
+
+**Squaads Assistant**:
+El asistente de chat embebido en la web app (`apps/web/src/components/chat/`). Responde en español
+(voseo) usando el corpus de conocimiento y herramientas del sistema.
+
+**Corpus de conocimiento**:
+El conjunto de documentos estáticos que alimenta el system prompt del asistente
+(`apps/web/src/integrations/chat/knowledge/`). Es la única fuente de "entrenamiento" del chat; debe
+reflejar el estado real de las features desplegadas.
+
+**Soporte**:
+Topic del Squaads Assistant que concentra la ayuda al usuario y aloja la entrada "Reportar un problema".
+_Avoid_: support, ayuda.
+
+**Reportar un problema**:
+Acción del usuario que envía un reporte al canal de Discord del equipo mediante el módulo `bug-report`.
+En la UI vive dentro del topic Soporte del asistente y en el detalle de reunión. Registro de la copy: voseo.
+_Avoid_: Report a bug, reportar un error, reportar un bug.
+
+**Acceso** (copy de usuario para `Access Grant`):
+En cualquier texto visible al usuario, `Access Grant` siempre se dice "acceso" o "dar acceso" — nunca el
+nombre técnico. Se otorga manualmente (Owner comparte) o automáticamente a co-asistentes del auto-join
+(ADR-0007).
+_Avoid_ (en UI): Access Grant, permiso, share.
+
+**Enlace de acceso restringido** (copy de usuario para `restricted_email`):
+Único tipo de `meeting_shares` vigente — un enlace enviado por email a un destinatario concreto. Los
+enlaces públicos fueron eliminados en la feature 009 (ver ADR-0005) y no deben mencionarse como opción
+vigente en ningún texto de cara al usuario.
+_Avoid_: link público, share público, enlace público.
+
+**Share Request** (ver ADR-0008):
+Propuesta de compartir (destinatarios + tipo de acceso) creada por un `Owner` cuyo `Authorized Account`
+tiene `role: member`. No es todavía un `Access Grant` ni un `meeting_shares` — queda en estado pendiente
+hasta que cualquier `Authorized Account` con `role: admin` la aprueba o la rechaza. La autoridad de
+aprobación es global (cualquier admin de la plataforma, no solo uno invitado a esa reunión) y no depende
+de si el admin participó de la reunión. Un `Owner` con `role: admin` comparte directo, sin pasar por
+`Share Request`. Al aprobarse, crea el `Access Grant`/`meeting_shares` correspondiente y dispara el envío
+real del email; al rechazarse, no crea nada. El aviso a los admins es una campanita en el navbar con
+contador — el contador cuenta `Share Request`s pendientes (no vistas-por-admin; "no leída" = "pendiente
+de decisión", igual para todos los admins, no hay lectura individual por admin).
+_Avoid_: pending share, notification (la notificación es solo el aviso; `Share Request` es el dato).
