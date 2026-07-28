@@ -1,31 +1,32 @@
-# Design: Meeting Ownership & Personalized Sharing (+ S3 Naming)
+# Diseño: Meeting Ownership & Personalized Sharing (+ Nomenclatura S3)
 
-## Technical Approach
+## Enfoque técnico
 
-Add a single ownership choke point (`meetings.ownerId`, `NOT NULL` FK to `users.id`) resolved at the
-one function every meeting-creation path already funnels through — `queueMeetingRun()` — instead of
-patching each caller independently. Every read path (`WebMeetingRepository`, `createShareAction`) gains
-an explicit ownership/grant filter instead of the current no-filter/no-auth-check behavior. A new
-`meeting_access_grants` table (mirrors `meeting_shares`' shape) covers registered-user sharing;
-`meeting_shares` keeps `restricted_email` only — `"public"` is removed via enum recreation, not a data
-migration, because Postgres cannot drop a live enum value. S3 naming becomes read-persisted-key-first,
-recompute-fallback-second, so the new `${provider}/${name}_${date}_${id}.mp4` format never desyncs
-already-uploaded objects.
+Se agrega un único choke point de ownership (`meetings.ownerId`, FK `NOT NULL` hacia `users.id`)
+resuelto en la única función por la que ya pasa todo path de creación de reunión —
+`queueMeetingRun()` — en lugar de parchar cada caller por separado. Cada path de lectura
+(`WebMeetingRepository`, `createShareAction`) gana un filtro explícito de ownership/grant en lugar del
+comportamiento actual sin filtro y sin chequeo de auth. Una nueva tabla `meeting_access_grants` (con la
+misma forma que `meeting_shares`) cubre el sharing entre usuarios registrados; `meeting_shares` conserva
+solo `restricted_email` — `"public"` se elimina recreando el enum, no con una migración de datos, porque
+Postgres no puede eliminar un valor de enum en uso. La nomenclatura de S3 pasa a ser
+leer-la-clave-persistida-primero, recalcular-como-fallback-después, de modo que el nuevo formato
+`${provider}/${name}_${date}_${id}.mp4` nunca desincroniza los objetos ya subidos.
 
-## Architecture Decisions
+## Decisiones de arquitectura
 
-| Decision | Choice | Alternatives considered | Rationale |
+| Decisión | Elección | Alternativas consideradas | Justificación |
 |---|---|---|---|
-| Owner capture point | Single change in `queueMeetingRun()` (packages/shared/src/services/meetingQueueService.ts), new mandatory `ownerId: string` param | Patch each of the 6 entry points independently | Root-cause fix: every entry point already routes through this one function; one guard beats six |
-| Chat-tool auth | `getServerSession(authOptions)` called directly inside `enqueueMeetingTool.execute` / `manageMeetingShareTool.execute` | Thread a `context: { userId }` param through `ToolDefinition.execute` → `executeTool` → `streamChatRuntime` → every `ChatProvider.streamChat` implementation | `api/chat/route.ts` already runs `getServerSession` in the same Next.js request scope; calling it again inside the two tools that need it is a 2-file diff vs. restructuring the entire tool-calling interface for tools that don't need it |
-| Machine-to-machine owner (`/api/bot/start`, `API_ROUTE_SECRET`) | Require `ownerEmail` in the request body, resolve via new `UserRepository.findByEmail`; 400 if missing/unresolvable | Leave this route ownerless (violates NOT NULL); derive owner from `organizerEmail` (spec explicitly forbids this) | No session exists on this route; explicit resolvable identity is the only way to satisfy "Owner is mandatory" without inventing calendar-derived ownership. Confirmed via `apps/extension/src/background/api-client.ts` (`resolveTransport`) this route is only hit in legacy-token auth mode — the modern linked-session mode rewrites to `/api/v1/extension/bot/start`, which already has `userId` from the Extension Access Token payload and needs zero changes. `docs/extension.md` confirms `/api/bot/start` predates the Extension Access Token system (002/003/007) — legacy fallback, not a separately-designed integration |
-| Auto-join owner resolution | Primary path (OAuth-connected calendar users): thread `ownerId` = the calendar-enabled `users.id` whose credentials the provider queried under. Narrow fallback path (zero OAuth users, static `AUTO_JOIN_ORGANIZER_EMAILS` env list): skip enqueueing, log a warning | Fabricate a synthetic/service owner for the env-var-only fallback | The env-list fallback has no `users` row to attribute — inventing ownership data is worse than a logged skip (non-destructive; meeting just doesn't auto-join), and there's no evidence this narrow config path is relied on in production |
-| `"public"` enum removal | Recreate `share_type` enum without `"public"`; revoked `"public"` rows relabeled to `"restricted_email"` before the type swap | Backfill/delete rows; leave enum as-is and just stop issuing `"public"` in code | Postgres has no `ALTER TYPE ... DROP VALUE`; rows already have `revokedAt` set so relabeling is inert (`resolvePublicShare` checks `revokedAt` before ever branching on `shareType`) |
-| Grant TTL | Reuse `DEFAULT_SHARE_TTL_OPTIONS_MINUTES` verbatim, extracted to a shared module | New TTL constant for grants | Spec requires identical menu; extraction avoids duplicating the array in two services |
-| Participant storage | `meetings.participantEmails: jsonb` (string array), no new table | Full `meeting_participants` table | YAGNI — Owner reviews/grants one at a time, no per-participant state (status, timestamps) needed |
-| Calendar owner attribution | `CalendarMeetingEvent` gains `ownerUserId: string`; `GoogleCalendarProvider` already loops per-OAuth-user, just needs to stamp it | Resolve owner later from `organizerEmail` | Spec forbids deriving from `organizerEmail`; the per-user OAuth loop already knows exactly which registered user this event came from |
+| Punto de captura del Owner | Un único cambio en `queueMeetingRun()` (packages/shared/src/services/meetingQueueService.ts), nuevo parámetro obligatorio `ownerId: string` | Parchar cada uno de los 6 entry points por separado | Fix de causa raíz: todo entry point ya rutea a través de esta única función; un solo guard le gana a seis |
+| Auth de la chat-tool | `getServerSession(authOptions)` llamado directamente dentro de `enqueueMeetingTool.execute` / `manageMeetingShareTool.execute` | Propagar un parámetro `context: { userId }` a través de `ToolDefinition.execute` → `executeTool` → `streamChatRuntime` → cada implementación de `ChatProvider.streamChat` | `api/chat/route.ts` ya ejecuta `getServerSession` dentro del mismo scope de request de Next.js; volver a llamarlo dentro de las dos tools que lo necesitan es un diff de 2 archivos, contra reestructurar toda la interfaz de tool-calling para tools que no lo necesitan |
+| Owner machine-to-machine (`/api/bot/start`, `API_ROUTE_SECRET`) | Exigir `ownerEmail` en el body del request, resolver vía el nuevo `UserRepository.findByEmail`; 400 si falta o no se puede resolver | Dejar esta ruta sin Owner (viola el NOT NULL); derivar el owner de `organizerEmail` (el spec lo prohíbe explícitamente) | No existe sesión en esta ruta; una identidad explícita y resoluble es la única forma de cumplir "El Owner es obligatorio" sin inventar un ownership derivado del calendario. Se confirmó vía `apps/extension/src/background/api-client.ts` (`resolveTransport`) que esta ruta solo se usa en el modo de auth por legacy-token — el modo moderno de sesión enlazada reescribe hacia `/api/v1/extension/bot/start`, que ya tiene `userId` desde el payload del Extension Access Token y no necesita ningún cambio. `docs/extension.md` confirma que `/api/bot/start` es anterior al sistema de Extension Access Token (002/003/007) — es un fallback legacy, no una integración diseñada por separado |
+| Resolución de owner en auto-join | Path primario (usuarios de calendario conectados por OAuth): propagar `ownerId` = el `users.id` con calendario habilitado bajo cuyas credenciales consultó el provider. Path de fallback acotado (cero usuarios OAuth, lista estática de env `AUTO_JOIN_ORGANIZER_EMAILS`): saltear el encolado, loguear un warning | Fabricar un owner sintético/de servicio para el fallback que solo depende de la env var | El fallback de la lista de env no tiene ninguna fila de `users` a la que atribuir — inventar datos de ownership es peor que un skip logueado (no destructivo; la reunión simplemente no hace auto-join), y no hay evidencia de que se dependa de este path de config acotado en producción |
+| Eliminación de `"public"` del enum | Recrear el enum `share_type` sin `"public"`; reetiquetar las filas `"public"` revocadas a `"restricted_email"` antes del swap de tipo | Backfillear/borrar filas; dejar el enum como está y simplemente dejar de emitir `"public"` en el código | Postgres no tiene `ALTER TYPE ... DROP VALUE`; las filas ya tienen `revokedAt` seteado, así que reetiquetar es inerte (`resolvePublicShare` chequea `revokedAt` antes de ramificar por `shareType`) |
+| TTL del grant | Reusar `DEFAULT_SHARE_TTL_OPTIONS_MINUTES` tal cual, extraído a un módulo compartido | Nueva constante de TTL para grants | El spec exige el mismo menú; la extracción evita duplicar el array en dos servicios |
+| Almacenamiento de Participant | `meetings.participantEmails: jsonb` (array de strings), sin tabla nueva | Tabla completa `meeting_participants` | YAGNI — el Owner revisa/otorga de a uno, no se necesita estado por participant (status, timestamps) |
+| Atribución del owner de calendario | `CalendarMeetingEvent` gana `ownerUserId: string`; `GoogleCalendarProvider` ya itera por usuario OAuth, solo necesita estamparlo | Resolver el owner más tarde a partir de `organizerEmail` | El spec prohíbe derivarlo de `organizerEmail`; el loop por usuario OAuth ya sabe exactamente de qué usuario registrado vino este evento |
 
-## Data Flow
+## Flujo de datos
 
     Extension INVITE_BOT ──┐
     Dashboard "queue" ──────┼──→ resolve ownerId (session/token/email) ──→ queueMeetingRun(ownerId, ...)
@@ -46,46 +47,46 @@ already-uploaded objects.
     Upload completes ──→ buildAndPersistRecordingStorageKey(meeting) ──→ meetings.recordingStorageKey
     Delete/sign/download ──→ recordingStorageKey ?? buildRecordingStorageKey() (legacy fallback)
 
-## File Changes
+## Cambios de archivos
 
-| File | Action | Description |
+| Archivo | Acción | Descripción |
 |---|---|---|
-| `packages/shared/src/db/schema.ts` | Modify | `meetings.ownerId` (NOT NULL FK `users.id`), `meetings.recordingStorageKey` (nullable text), `meetings.participantEmails` (nullable jsonb string[]); `shareTypeEnum` drops `"public"`; new `meetingAccessGrants` table |
-| `drizzle/0006_meeting_ownership_and_sharing.sql` | Create | Hand-written migration: add columns, create `meeting_access_grants`, revoke+relabel `"public"` rows, recreate `share_type` enum |
-| `packages/shared/src/repositories/UserRepository.ts` | Create | `findByEmail(email): Promise<{id, email} \| null>` — needed by the machine-to-machine owner resolution |
-| `packages/shared/src/repositories/MeetingRepository.ts` | Modify | `MeetingInsert` now requires `ownerId`; no method signature changes (types flow from schema) |
-| `packages/shared/src/repositories/MeetingAccessGrantRepository.ts` | Create | CRUD mirroring `MeetingShareRepository`: `create`, `findById`, `listByMeetingId`, `findLiveGrant(meetingId, granteeUserId)`, `revokeById` |
-| `packages/shared/src/services/meetingQueueService.ts` | Modify | `StartMeetingParams` gains mandatory `ownerId: string` and optional `participantEmails?: string[]`; both passed to `MeetingRepository.insert` |
-| `apps/web/src/commands/meeting/EnqueueMeetingCommand.ts` | Modify | `EnqueueMeetingInput` gains mandatory `ownerId: string` |
-| `apps/web/src/services/meetingService.ts` | Modify | `enqueueMeeting(input)` — `input.ownerId` required, passthrough only |
-| `apps/web/src/app/actions/bot.ts` | Modify | `startBotAction` resolves `getServerSession(authOptions)`, 401s if no `session.user.id`, passes it as `ownerId` |
-| `apps/web/src/app/api/v1/extension/bot/start/route.ts` | Modify | `ownerId = auth.payload.userId` (already present in `ExtensionAccessTokenPayload`, zero new auth work) |
-| `apps/web/src/app/api/bot/start/route.ts` | Modify | Require `ownerEmail` in body; `UserRepository.findByEmail`; 400 if missing/unknown |
-| `apps/worker/src/integrations/calendar/types.ts` | Modify | `CalendarMeetingEvent` gains `ownerUserId: string`, `participantEmails: string[]` |
-| `apps/worker/src/integrations/calendar/providers/GoogleCalendarProvider.ts` | Modify | `fetchEvents` takes the current OAuth `user.id`, stamps `ownerUserId`; maps `event.attendees` → `participantEmails` |
-| `apps/worker/src/services/autoJoinService.ts` | Modify | Primary path (OAuth-connected users present): passes `ownerId: event.ownerUserId`, `participantEmails: event.participantEmails` to `queueMeetingRun`. Narrow fallback (zero OAuth users, static `AUTO_JOIN_ORGANIZER_EMAILS` env list): no resolvable `users` row exists — skip enqueueing that event and log a warning instead of calling `queueMeetingRun` |
-| `apps/web/src/repositories/WebMeetingRepository.ts` | Modify | `listRecent(userId)` / `listFiltered(userId, filters)` — ownership+grant+active-owner filter (see Interfaces) |
-| `apps/web/src/repositories/MeetingAccessGrantRepository.ts` callers (`apps/web/src/app/(main)/**` pages) | Modify | Thread `session.user.id` into the repository calls |
-| `packages/shared/src/meetingProvider.ts` | Modify | Add `sanitizeMeetingNameForStorageKey(name)` and `buildNamedRecordingStorageKey(meetingId, meetingName, recordedAt, providerHint)`; `buildRecordingStorageKey()` untouched (legacy fallback) |
-| `apps/worker/src/services/meetingWorkerService.ts` | Modify | On upload: compute `buildNamedRecordingStorageKey(...)`, persist to `meetings.recordingStorageKey` alongside `recordingFilePath` |
-| `apps/worker/src/services/meetingRecoveryService.ts` | Modify | Resolve key via `meeting.recordingStorageKey ?? buildRecordingStorageKey(...)` |
-| `apps/web/src/services/meetingShareService.ts` | Modify | Same resolve-then-fallback for signed URLs; `createShare` requires `callerId` and throws unless `callerId === meeting.ownerId`; drop `"public"` branch |
-| `apps/web/src/commands/meeting/DeleteMeetingCommand.ts` | Modify | Same resolve-then-fallback before calling storage delete |
-| `apps/web/src/app/api/meetings/[id]/route.ts` | Modify | Same resolve-then-fallback |
-| `apps/web/src/app/api/v1/extension/meetings/[id]/route.ts` | Modify | Same resolve-then-fallback |
-| `apps/web/src/app/(main)/meeting/[id]/page.tsx` | Modify | Same resolve-then-fallback |
-| `apps/web/src/integrations/sharing/types.ts` | Modify | `ShareType = "restricted_email"` (drop `"public"`) |
-| `apps/web/src/integrations/sharing/SharingProvider.ts` | Modify | `readonly type: "restricted_email"` |
-| `apps/web/src/integrations/sharing/SharingProviderFactory.ts` | Modify | Drop `"public"` case |
-| `apps/web/src/integrations/sharing/providers/PublicSharingProvider.ts` | Delete | No longer reachable |
-| `apps/web/src/integrations/sharing/shareTtl.ts` | Create | Extracted `DEFAULT_SHARE_TTL_OPTIONS_MINUTES`, `getConfiguredTtlOptionsMinutes`, `resolveExpiresAt` — imported by both `meetingShareService.ts` and the new `meetingAccessGrantService.ts` |
-| `apps/web/src/services/meetingAccessGrantService.ts` | Create | `createGrant`, `listGrantsByMeetingId`, `revokeGrant` — mirrors `MeetingShareService`, reuses `shareTtl.ts` |
-| `apps/web/src/app/actions/grants.ts` | Create | `createGrantAction`, `revokeGrantAction` — mirrors `shares.ts`, both require `session.user.id === meeting.ownerId` |
-| `apps/web/src/app/actions/shares.ts` | Modify | `createShareAction` resolves session, passes `callerId` to `MeetingShareService.createShare` |
-| `apps/web/src/components/MeetingDetailsView.tsx` | Modify | Remove `"public"` from `shareType` state/options/labels/rendering; add grant-creation UI (per-participant suggestion list + manual email entry) |
-| `apps/web/src/integrations/chat/tools/definitions.ts` | Modify | `enqueueMeetingTool.execute`: resolve session, pass `ownerId`; `manageMeetingShareTool`: drop `"public"` from `share_type` enum, route `create`/`revoke` through `MeetingShareService`/new grant service (not raw `MeetingShareRepository.create`) with the same ownership check |
+| `packages/shared/src/db/schema.ts` | Modificar | `meetings.ownerId` (FK NOT NULL a `users.id`), `meetings.recordingStorageKey` (text nullable), `meetings.participantEmails` (jsonb string[] nullable); `shareTypeEnum` elimina `"public"`; nueva tabla `meetingAccessGrants` |
+| `drizzle/0006_meeting_ownership_and_sharing.sql` | Crear | Migración escrita a mano: agrega columnas, crea `meeting_access_grants`, revoca y reetiqueta las filas `"public"`, recrea el enum `share_type` |
+| `packages/shared/src/repositories/UserRepository.ts` | Crear | `findByEmail(email): Promise<{id, email} \| null>` — necesario para la resolución de owner machine-to-machine |
+| `packages/shared/src/repositories/MeetingRepository.ts` | Modificar | `MeetingInsert` ahora exige `ownerId`; sin cambios de firma de métodos (los tipos fluyen desde el schema) |
+| `packages/shared/src/repositories/MeetingAccessGrantRepository.ts` | Crear | CRUD que espeja a `MeetingShareRepository`: `create`, `findById`, `listByMeetingId`, `findLiveGrant(meetingId, granteeUserId)`, `revokeById` |
+| `packages/shared/src/services/meetingQueueService.ts` | Modificar | `StartMeetingParams` gana `ownerId: string` obligatorio y `participantEmails?: string[]` opcional; ambos se pasan a `MeetingRepository.insert` |
+| `apps/web/src/commands/meeting/EnqueueMeetingCommand.ts` | Modificar | `EnqueueMeetingInput` gana `ownerId: string` obligatorio |
+| `apps/web/src/services/meetingService.ts` | Modificar | `enqueueMeeting(input)` — `input.ownerId` obligatorio, solo passthrough |
+| `apps/web/src/app/actions/bot.ts` | Modificar | `startBotAction` resuelve `getServerSession(authOptions)`, devuelve 401 si no hay `session.user.id`, lo pasa como `ownerId` |
+| `apps/web/src/app/api/v1/extension/bot/start/route.ts` | Modificar | `ownerId = auth.payload.userId` (ya presente en `ExtensionAccessTokenPayload`, sin trabajo nuevo de auth) |
+| `apps/web/src/app/api/bot/start/route.ts` | Modificar | Exigir `ownerEmail` en el body; `UserRepository.findByEmail`; 400 si falta o es desconocido |
+| `apps/worker/src/integrations/calendar/types.ts` | Modificar | `CalendarMeetingEvent` gana `ownerUserId: string`, `participantEmails: string[]` |
+| `apps/worker/src/integrations/calendar/providers/GoogleCalendarProvider.ts` | Modificar | `fetchEvents` recibe el `user.id` OAuth actual, estampa `ownerUserId`; mapea `event.attendees` → `participantEmails` |
+| `apps/worker/src/services/autoJoinService.ts` | Modificar | Path primario (hay usuarios conectados por OAuth): pasa `ownerId: event.ownerUserId`, `participantEmails: event.participantEmails` a `queueMeetingRun`. Fallback acotado (cero usuarios OAuth, lista estática de env `AUTO_JOIN_ORGANIZER_EMAILS`): no existe ninguna fila de `users` resoluble — saltear el encolado de ese evento y loguear un warning en lugar de llamar a `queueMeetingRun` |
+| `apps/web/src/repositories/WebMeetingRepository.ts` | Modificar | `listRecent(userId)` / `listFiltered(userId, filters)` — filtro de ownership+grant+owner-activo (ver Interfaces) |
+| `apps/web/src/repositories/MeetingAccessGrantRepository.ts` callers (`apps/web/src/app/(main)/**` pages) | Modificar | Propagar `session.user.id` a las llamadas del repositorio |
+| `packages/shared/src/meetingProvider.ts` | Modificar | Agregar `sanitizeMeetingNameForStorageKey(name)` y `buildNamedRecordingStorageKey(meetingId, meetingName, recordedAt, providerHint)`; `buildRecordingStorageKey()` sin tocar (fallback legacy) |
+| `apps/worker/src/services/meetingWorkerService.ts` | Modificar | En la subida: calcular `buildNamedRecordingStorageKey(...)`, persistir en `meetings.recordingStorageKey` junto con `recordingFilePath` |
+| `apps/worker/src/services/meetingRecoveryService.ts` | Modificar | Resolver la clave vía `meeting.recordingStorageKey ?? buildRecordingStorageKey(...)` |
+| `apps/web/src/services/meetingShareService.ts` | Modificar | Mismo resolve-then-fallback para URLs firmadas; `createShare` exige `callerId` y lanza excepción salvo que `callerId === meeting.ownerId`; elimina la rama `"public"` |
+| `apps/web/src/commands/meeting/DeleteMeetingCommand.ts` | Modificar | Mismo resolve-then-fallback antes de llamar al delete de storage |
+| `apps/web/src/app/api/meetings/[id]/route.ts` | Modificar | Mismo resolve-then-fallback |
+| `apps/web/src/app/api/v1/extension/meetings/[id]/route.ts` | Modificar | Mismo resolve-then-fallback |
+| `apps/web/src/app/(main)/meeting/[id]/page.tsx` | Modificar | Mismo resolve-then-fallback |
+| `apps/web/src/integrations/sharing/types.ts` | Modificar | `ShareType = "restricted_email"` (elimina `"public"`) |
+| `apps/web/src/integrations/sharing/SharingProvider.ts` | Modificar | `readonly type: "restricted_email"` |
+| `apps/web/src/integrations/sharing/SharingProviderFactory.ts` | Modificar | Elimina el case `"public"` |
+| `apps/web/src/integrations/sharing/providers/PublicSharingProvider.ts` | Eliminar | Ya no es alcanzable |
+| `apps/web/src/integrations/sharing/shareTtl.ts` | Crear | Extrae `DEFAULT_SHARE_TTL_OPTIONS_MINUTES`, `getConfiguredTtlOptionsMinutes`, `resolveExpiresAt` — importado tanto por `meetingShareService.ts` como por el nuevo `meetingAccessGrantService.ts` |
+| `apps/web/src/services/meetingAccessGrantService.ts` | Crear | `createGrant`, `listGrantsByMeetingId`, `revokeGrant` — espeja a `MeetingShareService`, reusa `shareTtl.ts` |
+| `apps/web/src/app/actions/grants.ts` | Crear | `createGrantAction`, `revokeGrantAction` — espeja a `shares.ts`, ambas exigen `session.user.id === meeting.ownerId` |
+| `apps/web/src/app/actions/shares.ts` | Modificar | `createShareAction` resuelve la sesión, pasa `callerId` a `MeetingShareService.createShare` |
+| `apps/web/src/components/MeetingDetailsView.tsx` | Modificar | Elimina `"public"` de state/options/labels/rendering de `shareType`; agrega UI de creación de grants (lista de sugerencias por participant + ingreso manual de email) |
+| `apps/web/src/integrations/chat/tools/definitions.ts` | Modificar | `enqueueMeetingTool.execute`: resuelve la sesión, pasa `ownerId`; `manageMeetingShareTool`: elimina `"public"` del enum `share_type`, rutea `create`/`revoke` a través de `MeetingShareService`/el nuevo grant service (no directamente `MeetingShareRepository.create`) con el mismo chequeo de ownership |
 
-## Interfaces / Contracts
+## Interfaces / Contratos
 
 ```typescript
 // packages/shared/src/services/meetingQueueService.ts
@@ -185,7 +186,7 @@ if (!owner) return NextResponse.json({ error: "ownerEmail does not match a regis
 // owner.id passed as ownerId to MeetingService.enqueueMeeting
 ```
 
-## Schema (Drizzle)
+## Esquema (Drizzle)
 
 ```typescript
 export const meetings = pgTable("meetings", {
@@ -209,7 +210,7 @@ export const meetingAccessGrants = pgTable("meeting_access_grants", {
 }).enableRLS();
 ```
 
-### Migration mechanism for dropping `"public"` (Postgres cannot `ALTER TYPE ... DROP VALUE`)
+### Mecanismo de migración para eliminar `"public"` (Postgres no puede hacer `ALTER TYPE ... DROP VALUE`)
 
 ```sql
 -- 1. Revoke existing "public" shares (spec requirement)
@@ -233,46 +234,48 @@ ALTER TABLE "meetings" ADD COLUMN "participant_emails" jsonb;
 CREATE TABLE "meeting_access_grants" ( ... );
 ```
 
-Per the spec's Migration Note, this repo applies a DB reset alongside the migration (existing rows are
-test data), so step 4's `NOT NULL` needs no backward-compat path and steps 1–3 are effectively a no-op
-here — they are written for correctness against any future non-test dataset.
+Según la Nota de migración del spec, este repo aplica un reset de la DB junto con la migración (las
+filas existentes son datos de prueba), así que el `NOT NULL` del paso 4 no necesita ningún camino de
+compatibilidad hacia atrás y los pasos 1–3 son, en la práctica, un no-op acá — están escritos por
+corrección, pensando en cualquier dataset futuro que no sea de prueba.
 
-## Testing Strategy (TDD — RED test required for every logic item below; UI/multimedia exempt per AGENTS.md)
+## Estrategia de testing (TDD — se requiere un test RED para cada ítem de lógica de abajo; UI/multimedia exento según AGENTS.md)
 
-| Layer | What to test | RED test location |
+| Capa | Qué testear | Ubicación del test RED |
 |---|---|---|
-| `queueMeetingRun` requires `ownerId` | Throws/rejects insert without it; passes `ownerId`/`participantEmails` through | `apps/__tests__/shared/services/meeting-queue-service.test.ts` |
-| `WebMeetingRepository.listRecent`/`listFiltered` scoping | Owner sees own; grantee sees granted (live only); denies expired/revoked; denies deactivated-owner meetings; no admin bypass | `apps/__tests__/web/repositories/web-meeting-repository.test.ts` |
-| `MeetingAccessGrantRepository` | create/list/findLiveGrant expiry+revocation semantics | `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts` |
-| `MeetingAccessGrantService.createGrant`/`revokeGrant` ownership check | Non-owner rejected; owner succeeds; TTL menu reused | `apps/__tests__/web/services/meeting-access-grant-service.test.ts` |
-| `MeetingShareService.createShare` ownership retrofit | Non-owner rejected; owner succeeds; `"public"` shareType rejected | `apps/__tests__/web/services/meeting-share-service.test.ts` |
-| `sanitizeMeetingNameForStorageKey` / `buildNamedRecordingStorageKey` | Sanitization edge cases (unicode, slashes, empty name); date format; collision-safe suffix | `apps/__tests__/shared/meeting-provider.test.ts` |
-| Storage-key resolve-then-fallback (each of the 7 retrofit call sites) | Uses `recordingStorageKey` when present; falls back to `buildRecordingStorageKey()` when null | Extend each call site's existing test file under `apps/__tests__/{web,worker}/...` |
-| `GoogleCalendarProvider` attendee/owner capture | `ownerUserId` stamped per OAuth user; `event.attendees` mapped to `participantEmails`; service-account fallback path yields no `ownerUserId` and is skipped | `apps/__tests__/worker/calendar/google-calendar-provider.test.ts` |
-| `autoJoinService` skip-when-ownerless | Events without `ownerUserId` are not enqueued | Extend `apps/__tests__/worker/shared/auto-join-service.test.ts` |
-| `/api/bot/start` ownerEmail resolution | 400 when missing/unknown; enqueues with resolved `ownerId` | `apps/__tests__/web/api/bot-start.test.ts` |
-| Chat tools ownership | `enqueue_meeting` sets `ownerId` from session; `manage_meeting_share` rejects non-owner create/revoke, rejects `"public"` | `apps/__tests__/web/integrations/chat-tools-definitions.test.ts` |
-| Exempt (UI/multimedia, per AGENTS.md) | `MeetingDetailsView.tsx` UI removal/addition; FFmpeg/S3 upload calls themselves | Manual/integration validation only |
+| `queueMeetingRun` exige `ownerId` | Lanza/rechaza el insert sin él; propaga `ownerId`/`participantEmails` | `apps/__tests__/shared/services/meeting-queue-service.test.ts` |
+| Acotamiento de `WebMeetingRepository.listRecent`/`listFiltered` | El Owner ve las suyas; el grantee ve las otorgadas (solo vigentes); deniega las vencidas/revocadas; deniega las reuniones de owner desactivado; sin bypass de admin | `apps/__tests__/web/repositories/web-meeting-repository.test.ts` |
+| `MeetingAccessGrantRepository` | Semántica de expiración+revocación de create/list/findLiveGrant | `apps/__tests__/shared/repositories/meeting-access-grant-repository.test.ts` |
+| Chequeo de ownership de `MeetingAccessGrantService.createGrant`/`revokeGrant` | El no-owner es rechazado; el owner tiene éxito; se reusa el menú de TTL | `apps/__tests__/web/services/meeting-access-grant-service.test.ts` |
+| Retrofit de ownership de `MeetingShareService.createShare` | El no-owner es rechazado; el owner tiene éxito; el shareType `"public"` es rechazado | `apps/__tests__/web/services/meeting-share-service.test.ts` |
+| `sanitizeMeetingNameForStorageKey` / `buildNamedRecordingStorageKey` | Casos límite de sanitización (unicode, barras, nombre vacío); formato de fecha; sufijo a prueba de colisiones | `apps/__tests__/shared/meeting-provider.test.ts` |
+| Resolve-then-fallback de la storage key (cada uno de los 7 sitios de retrofit) | Usa `recordingStorageKey` cuando está presente; recurre a `buildRecordingStorageKey()` cuando es null | Extender el archivo de test existente de cada sitio, bajo `apps/__tests__/{web,worker}/...` |
+| Captura de attendee/owner de `GoogleCalendarProvider` | `ownerUserId` estampado por usuario OAuth; `event.attendees` mapeado a `participantEmails`; el path de fallback de service-account no produce `ownerUserId` y se saltea | `apps/__tests__/worker/calendar/google-calendar-provider.test.ts` |
+| `autoJoinService` skip-when-ownerless | Los eventos sin `ownerUserId` no se encolan | Extender `apps/__tests__/worker/shared/auto-join-service.test.ts` |
+| Resolución de ownerEmail de `/api/bot/start` | 400 cuando falta o es desconocido; encola con el `ownerId` resuelto | `apps/__tests__/web/api/bot-start.test.ts` |
+| Ownership en las chat tools | `enqueue_meeting` setea `ownerId` desde la sesión; `manage_meeting_share` rechaza el create/revoke de un no-owner, rechaza `"public"` | `apps/__tests__/web/integrations/chat-tools-definitions.test.ts` |
+| Exento (UI/multimedia, según AGENTS.md) | Eliminación/agregado de UI en `MeetingDetailsView.tsx`; las llamadas de subida a FFmpeg/S3 en sí mismas | Solo validación manual/de integración |
 
-## Threat Matrix
+## Matriz de amenazas
 
-N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or
-process-integration boundary introduced by this change.
+N/A — este cambio no introduce routing, shell, subproceso, automatización de VCS/PR, clasificación de
+archivos ejecutables, ni límites de integración de procesos.
 
-## Migration / Rollout
+## Migración / Despliegue
 
-Single migration `drizzle/0006_meeting_ownership_and_sharing.sql` applied alongside a DB reset (test
-data only, per spec's Migration Note) — no phased rollout or feature flag needed. No backfill of
-`recordingStorageKey` for pre-existing recordings (explicit non-goal).
+Una única migración `drizzle/0006_meeting_ownership_and_sharing.sql` aplicada junto con un reset de la
+DB (solo datos de prueba, según la Nota de migración del spec) — no se necesita rollout por fases ni
+feature flag. Sin backfill de `recordingStorageKey` para grabaciones preexistentes (fuera de alcance
+explícito).
 
-## Open Questions
+## Preguntas abiertas
 
-None. Both prior open items are resolved (see Architecture Decisions table):
+Ninguna. Los dos ítems abiertos previos ya están resueltos (ver la tabla de Decisiones de arquitectura):
 
-- `/api/bot/start` requiring `ownerEmail` only affects the legacy-token auth mode of the extension
-  (confirmed via `apps/extension/src/background/api-client.ts` `resolveTransport` and
-  `docs/extension.md`); the modern linked-session mode already routes through
-  `/api/v1/extension/bot/start`, which needs no design changes.
-- `autoJoinService`'s narrow env-var-only fallback (zero OAuth-connected users) skips enqueueing with a
-  logged warning rather than fabricating ownership; the primary OAuth-connected-users path threads a
-  real `ownerId`.
+- Que `/api/bot/start` exija `ownerEmail` solo afecta al modo de auth por legacy-token de la extensión
+  (confirmado vía `apps/extension/src/background/api-client.ts` `resolveTransport` y
+  `docs/extension.md`); el modo moderno de sesión enlazada ya rutea a través de
+  `/api/v1/extension/bot/start`, que no necesita ningún cambio de diseño.
+- El fallback acotado de `autoJoinService` que solo depende de la env var (cero usuarios conectados por
+  OAuth) saltea el encolado con un warning logueado en lugar de fabricar un ownership; el path primario
+  de usuarios conectados por OAuth propaga un `ownerId` real.
