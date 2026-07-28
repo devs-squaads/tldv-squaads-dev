@@ -13,7 +13,10 @@ bunMock.module("@/services/meetingService", () => ({
 
 const mockFindByEmail = mock(() => Promise.resolve(null as { id: string; email: string } | null));
 bunMock.module("@meeting-bot/shared/repositories/UserRepository", () => ({
-  UserRepository: { findByEmail: mockFindByEmail },
+  // findByIds stubbed to keep this process-wide mock.module() registration
+  // (first-registration-wins) satisfying the real UserRepository interface for any other test
+  // file that transitively depends on it.
+  UserRepository: { findByEmail: mockFindByEmail, findByIds: async () => [] },
 }));
 
 const { POST } = await import("../../../web/src/app/api/bot/start/route");

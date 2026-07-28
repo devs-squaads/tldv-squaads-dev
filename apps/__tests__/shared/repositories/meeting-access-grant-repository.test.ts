@@ -224,6 +224,48 @@ describe.skipIf(!dbAvailable)("MeetingAccessGrantRepository CRUD (requires `bun 
 
     await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${grant.meetingId}`);
   });
+
+  it("deleteById removes the row", async () => {
+    const suffix = crypto.randomUUID();
+    const grant = makeGrant(suffix);
+    await MeetingAccessGrantRepository.create(grant);
+
+    await MeetingAccessGrantRepository.deleteById(grant.id);
+
+    const found = await MeetingAccessGrantRepository.findById(grant.id);
+    expect(found).toBeNull();
+  });
+
+  it("deleteInactiveByMeetingId removes revoked and expired grants, keeps active ones, and returns the deleted count", async () => {
+    const suffix = crypto.randomUUID();
+    const meetingId = `meeting-${suffix}`;
+    const revoked = makeGrant(suffix, { id: `grant-revoked-${suffix}`, meetingId, revokedAt: new Date() });
+    const expired = makeGrant(`${suffix}-expired`, {
+      id: `grant-expired-${suffix}`,
+      meetingId,
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    const active = makeGrant(`${suffix}-active`, { id: `grant-active-${suffix}`, meetingId });
+
+    await MeetingAccessGrantRepository.create(revoked);
+    await MeetingAccessGrantRepository.create(expired);
+    await MeetingAccessGrantRepository.create(active);
+
+    const deletedCount = await MeetingAccessGrantRepository.deleteInactiveByMeetingId(meetingId);
+
+    expect(deletedCount).toBe(2);
+    expect(await MeetingAccessGrantRepository.findById(revoked.id)).toBeNull();
+    expect(await MeetingAccessGrantRepository.findById(expired.id)).toBeNull();
+    expect(await MeetingAccessGrantRepository.findById(active.id)).not.toBeNull();
+
+    await db.execute(sql`DELETE FROM "meeting_access_grants" WHERE "meeting_id" = ${meetingId}`);
+  });
+
+  it("deleteInactiveByMeetingId returns 0 when there is nothing inactive to delete", async () => {
+    const suffix = crypto.randomUUID();
+    const deletedCount = await MeetingAccessGrantRepository.deleteInactiveByMeetingId(`meeting-${suffix}`);
+    expect(deletedCount).toBe(0);
+  });
 });
 
 /** Mirrors MeetingAccessGrantRepository.ts's `findLiveGrant()` WHERE clause verbatim. */

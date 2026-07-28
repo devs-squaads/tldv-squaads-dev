@@ -37,7 +37,9 @@ describe.skipIf(!dbAvailable)("UserRepository.findByEmail (requires `bun run inf
     if (dbAvailable) {
       await db.execute(sql`DELETE FROM "users" WHERE "id" = ${userId}`);
     }
-    await pool.end();
+    // pool.end() deliberately not called here — it's shared with the findByIds describe block
+    // below (same file-level `pool`), which ends it once in its own afterAll after all describe
+    // blocks have run.
   });
 
   it("returns null when no user matches the email (machine-to-machine ownerEmail resolution miss)", async () => {
@@ -54,5 +56,39 @@ describe.skipIf(!dbAvailable)("UserRepository.findByEmail (requires `bun run inf
     const result = await UserRepository.findByEmail(email);
     expect(result?.id).toBe(userId);
     expect(result?.email).toBe(email);
+  });
+});
+
+describe.skipIf(!dbAvailable)("UserRepository.findByIds (requires `bun run infra:up`)", () => {
+  const suffix = crypto.randomUUID();
+  const userAId = `user-a-${suffix}`;
+  const userBId = `user-b-${suffix}`;
+  const emailA = `grantee-a-${suffix}@squaads.com`;
+  const emailB = `grantee-b-${suffix}@squaads.com`;
+
+  afterAll(async () => {
+    if (dbAvailable) {
+      await db.execute(sql`DELETE FROM "users" WHERE "id" IN (${userAId}, ${userBId})`);
+    }
+    await pool.end();
+  });
+
+  it("returns an empty array without querying when given no ids", async () => {
+    const result = await UserRepository.findByIds([]);
+    expect(result).toEqual([]);
+  });
+
+  it("returns the id+email rows for every matching id, ignoring ids that don't exist", async () => {
+    await db.execute(
+      sql`INSERT INTO "users" ("id", "email", "created_at", "updated_at") VALUES
+          (${userAId}, ${emailA}, now(), now()),
+          (${userBId}, ${emailB}, now(), now())`,
+    );
+
+    const result = await UserRepository.findByIds([userAId, userBId, `missing-${suffix}`]);
+
+    expect(result.map((u) => u.id).sort()).toEqual([userAId, userBId].sort());
+    expect(result.find((u) => u.id === userAId)?.email).toBe(emailA);
+    expect(result.find((u) => u.id === userBId)?.email).toBe(emailB);
   });
 });

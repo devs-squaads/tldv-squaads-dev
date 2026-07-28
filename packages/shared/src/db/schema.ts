@@ -1,4 +1,4 @@
-import { pgEnum, pgTable, text, integer, timestamp, boolean, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgEnum, pgTable, text, integer, timestamp, boolean, index, uniqueIndex, jsonb, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const users = pgTable("users", {
@@ -107,6 +107,10 @@ export const meetingShares = pgTable("meeting_shares", {
   otpHash: text("otp_hash"),
   otpExpiresAt: timestamp("otp_expires_at", { withTimezone: true }),
   lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
+  // Dies on first successful OTP verifyAccess() (013/ADR-0008) — verifyRestrictedAccess
+  // revokes the share on first success by reusing revokedAt, same column the manual
+  // revoke flow already sets.
+  singleUse: boolean("single_use").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 }).enableRLS();
@@ -140,6 +144,61 @@ export const meetingAccessGrants = pgTable(
     // ON CONFLICT DO NOTHING — same race class as meetings' source-event index (Problem 1),
     // one layer up. See spec/features/010-auto-join-dedup-and-recovery/spec.md Problem 2.
     uniqueIndex("meeting_access_grants_meeting_grantee_unique_idx").on(table.meetingId, table.granteeUserId),
+  ],
+).enableRLS();
+
+export const shareRequestStatusEnum = pgEnum("share_request_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "cancelled",
+]);
+
+export const shareRequestAccessTypeEnum = pgEnum("share_request_access_type", [
+  "single_use",
+  "temporary",
+  "permanent",
+]);
+
+// A member Owner's proposed share (ADR-0008) — gates, never replaces, meetingAccessGrants /
+// meetingShares. Approval re-enters those services on the Owner's behalf; rejection/cancellation
+// create nothing here or downstream. One row per recipient.
+export const meetingShareRequests = pgTable(
+  "meeting_share_requests",
+  {
+    id: text("id").primaryKey(),
+    meetingId: text("meeting_id").notNull(),
+    requesterId: text("requester_id").notNull(), // == meeting.ownerId at creation time
+    granteeUserId: text("grantee_user_id"), // registered recipient (XOR the email pair below)
+    recipientEmail: text("recipient_email"),
+    recipientEmailNormalized: text("recipient_email_normalized"),
+    accessType: shareRequestAccessTypeEnum("access_type").notNull(),
+    expiresInDays: integer("expires_in_days"), // required iff accessType = "temporary"
+    status: shareRequestStatusEnum("status").default("pending").notNull(),
+    resolvedBy: text("resolved_by"), // admin users.id
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedGrantId: text("resolved_grant_id"),
+    resolvedShareId: text("resolved_share_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    // Recipient is exactly one of a registered user or an unregistered email, enforced at the
+    // DB level (mirrors meetingShares' recipientEmail/recipientEmailNormalized pairing).
+    check(
+      "meeting_share_requests_grantee_xor_email",
+      sql`(${t.granteeUserId} IS NOT NULL) <> (${t.recipientEmailNormalized} IS NOT NULL)`,
+    ),
+    // Insert-is-the-arbiter idiom (same race class as meeting_access_grants_meeting_grantee_unique_idx
+    // and meetings_source_event_unique_idx): partial unique per recipient kind so at most one pending
+    // request exists per recipient — race-proof. Resolved requests (approved/rejected/cancelled)
+    // don't collide, so a rejected request never blocks a later real one.
+    uniqueIndex("msr_pending_grantee_uq")
+      .on(t.meetingId, t.granteeUserId)
+      .where(sql`${t.status} = 'pending' AND ${t.granteeUserId} IS NOT NULL`),
+    uniqueIndex("msr_pending_email_uq")
+      .on(t.meetingId, t.recipientEmailNormalized)
+      .where(sql`${t.status} = 'pending' AND ${t.recipientEmailNormalized} IS NOT NULL`),
   ],
 ).enableRLS();
 

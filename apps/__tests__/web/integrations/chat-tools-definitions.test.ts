@@ -124,6 +124,7 @@ describe("manage_meeting_share tool — owner-only create/revoke routed through 
       expect(mockCreateShare).toHaveBeenCalledWith(
         expect.objectContaining({ meetingId: "meeting-1", shareType: "restricted_email" }),
         "owner-1",
+        undefined,
       );
       expect(result.createdShare?.shareUrl).toBe("https://app.test/share/abc");
     });
@@ -141,6 +142,40 @@ describe("manage_meeting_share tool — owner-only create/revoke routed through 
 
       expect(result.success).toBe(false);
       expect(result.message).toContain("owner");
+    });
+
+    // 013 Phase 7: manage_meeting_share passes the caller's session role through, so the
+    // service-level guard (member direct-create throws — meetingShareService.ts) protects this
+    // non-action caller too, exactly like the app/actions/shares.ts server action already does.
+    it("passes the caller's admin role through to MeetingShareService.createShare", async () => {
+      mockGetServerSession.mockResolvedValueOnce({ user: { id: "owner-1", role: "admin" } });
+
+      await manageMeetingShareTool.execute({
+        action: "create",
+        meeting_id: "meeting-1",
+        share_type: "restricted_email",
+        recipient_email: "guest@example.com",
+      });
+
+      expect(mockCreateShare).toHaveBeenCalledWith(expect.any(Object), "owner-1", "admin");
+    });
+
+    it("gives a member caller an explicit admin-approval error instead of silently creating a share request", async () => {
+      mockGetServerSession.mockResolvedValueOnce({ user: { id: "member-1", role: "member" } });
+      mockCreateShare.mockRejectedValueOnce(
+        new Error("Member owners must submit a share request for admin approval"),
+      );
+
+      const result = await manageMeetingShareTool.execute({
+        action: "create",
+        meeting_id: "meeting-1",
+        share_type: "restricted_email",
+        recipient_email: "guest@example.com",
+      });
+
+      expect(mockCreateShare).toHaveBeenCalledWith(expect.any(Object), "member-1", "member");
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("admin approval");
     });
   });
 

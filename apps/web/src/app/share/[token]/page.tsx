@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { formatDate } from "@/lib/utils";
 import { CheckCircle2, Loader2, Lock, Mail, ShieldAlert, Video } from "lucide-react";
+import { InfoModal, type InfoModalVariant } from "@/components/ui/InfoModal";
 
 interface SharedMeeting {
   id: string;
@@ -33,6 +34,7 @@ export default function PublicSharePage() {
   const [code, setCode] = useState("");
   const [codeRequested, setCodeRequested] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [infoModal, setInfoModal] = useState<{ variant: InfoModalVariant; message: string } | null>(null);
 
   useEffect(() => {
     const run = async () => {
@@ -72,7 +74,7 @@ export default function PublicSharePage() {
       });
       if (!res.ok) {
         const data = await res.json();
-        alert(data.error || "No se pudo solicitar el código.");
+        setInfoModal({ variant: "error", message: data.error || "No se pudo solicitar el código." });
         return;
       }
       setCodeRequested(true);
@@ -93,7 +95,7 @@ export default function PublicSharePage() {
 
       if (!res.ok) {
         const data = await res.json();
-        alert(data.error || "Código inválido.");
+        setInfoModal({ variant: "error", message: data.error || "Código inválido." });
         return;
       }
 
@@ -180,6 +182,12 @@ export default function PublicSharePage() {
             )}
           </CardContent>
         </Card>
+        <InfoModal
+          open={infoModal !== null}
+          variant={infoModal?.variant ?? "info"}
+          message={infoModal?.message ?? ""}
+          onClose={() => setInfoModal(null)}
+        />
       </div>
     );
   }
