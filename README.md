@@ -350,10 +350,17 @@ bun run build:web
 
 ## Sharing API-First (web + clientes externos)
 El proyecto expone una capa de compartición reutilizable por `meeting-web` y otros clientes (ej. extensión Chrome):
-- Tipos de share: `public` y `restricted_email`.
+- Tipo de share: `restricted_email` (el tipo `public` fue eliminado en la feature 009 — toda reunión tiene
+  un Owner único y el acceso es siempre personalizado, nunca por enlace público).
 - Caducidad opcional: si no se define TTL, el enlace no expira (`expires_at = null`).
 - En `restricted_email` se exige verificación OTP.
 - El bucket debe permanecer privado; la descarga se resuelve por signed URLs temporales.
+- Solo el Owner de la reunión puede compartir/revocar (feature 009). Si el Owner tiene rol `member`, la
+  acción crea un `Share Request` pendiente en vez de un share directo, y requiere aprobación de un `admin`
+  de la plataforma antes de generar el share/Access Grant real y enviar el email (feature 013, ADR-0008).
+  UI admin (solo `role = admin`): `GET /admin/share-requests` — lista de solicitudes pendientes con
+  aprobar/rechazar; campana de notificación con el conteo global de pendientes visible en toda página
+  autenticada.
 
 ### Endpoints principales
 - Privados (requieren `API_ROUTE_SECRET` cuando está configurado):
