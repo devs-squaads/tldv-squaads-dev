@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { ACTIVE_PROCESSING_STATUSES } from "@meeting-bot/shared/domain/meetingStatus";
-import { ACTIVE_STATUSES, STATUS_COLORS, STATUS_LABELS } from "../../../extension/src/shared/constants";
+import {
+  ACTIVE_PROCESSING_STATUSES,
+  EXTENSION_TRACKABLE_STATUSES,
+} from "@meeting-bot/shared/domain/meetingStatus";
+import {
+  ACTIVE_STATUSES,
+  STATUS_COLORS,
+  STATUS_LABELS,
+  TRACKABLE_STATUSES,
+} from "../../../extension/src/shared/constants";
 
 const BACKEND_STATUSES = [
   "pending",
@@ -13,11 +21,16 @@ const BACKEND_STATUSES = [
   "admission_timeout",
   "rejected",
   "error",
+  "transcription_error",
 ] as const;
 
 describe("extension status contract alignment", () => {
   it("matches active statuses with backend", () => {
     expect([...ACTIVE_STATUSES].sort()).toEqual([...ACTIVE_PROCESSING_STATUSES].sort());
+  });
+
+  it("matches trackable recovery statuses with backend", () => {
+    expect([...TRACKABLE_STATUSES].sort()).toEqual([...EXTENSION_TRACKABLE_STATUSES].sort());
   });
 
   it("has labels for all backend statuses", () => {
