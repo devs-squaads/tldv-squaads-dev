@@ -45,7 +45,7 @@ jobs:
         run: bun run db:push
 
       - name: Run tests
-        run: bun test apps/__tests__
+        run: bun run test
 
       - name: Run lint
         run: bun run lint
