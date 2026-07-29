@@ -160,7 +160,7 @@ describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (req
 });
 
 describe("MeetingRepository trackable lookup contract — exported values", () => {
-  it("uses a same-day freshness window that supports meetings longer than ten minutes", () => {
+  it("uses a rolling 24h freshness window that supports meetings longer than ten minutes", () => {
     expect(EXTENSION_TRACKABLE_FRESHNESS_MS).toBe(24 * 60 * 60 * 1000);
     expect(EXTENSION_TRACKABLE_FRESHNESS_MS).toBeGreaterThan(10 * 60 * 1000);
   });
