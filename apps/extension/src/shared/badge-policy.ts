@@ -1,7 +1,16 @@
 import type { BadgeState, MeetingStatus } from "./types";
 
-/** Statuses that must drive the toolbar badge to the error ("!") state. */
-const BADGE_ERROR_STATUSES: MeetingStatus[] = ["error", "transcription_error"];
+/**
+ * Statuses that must drive the toolbar badge to the error ("!") state — every
+ * failure status, terminal or recoverable. Mirrors the widget, which renders its
+ * `error` state (badge "error") for all of admission_timeout/rejected/error.
+ */
+const BADGE_ERROR_STATUSES: MeetingStatus[] = [
+  "error",
+  "transcription_error",
+  "admission_timeout",
+  "rejected",
+];
 
 /**
  * Single source of truth for the toolbar badge derived from a meeting status.
