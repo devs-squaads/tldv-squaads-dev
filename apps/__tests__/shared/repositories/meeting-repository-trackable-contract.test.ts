@@ -1,4 +1,4 @@
-import { describe, expect, it, afterAll } from "bun:test";
+import { describe, expect, it, afterAll, afterEach } from "bun:test";
 import { createLiveConnection, sql } from "@meeting-bot/shared/db/liveConnection";
 import {
   EXTENSION_TRACKABLE_FRESHNESS_MS,
@@ -27,7 +27,13 @@ const dbAvailable = await canConnect();
 
 const { MeetingRepository } = await import("../../../../packages/shared/src/repositories/MeetingRepository");
 
+// Ids inserted by the current test, cleaned up by afterEach so a failing
+// assertion can never orphan rows (straight-line DELETEs are skipped on throw).
+const insertedUserIds: string[] = [];
+const insertedMeetingIds: string[] = [];
+
 async function insertUser(id: string): Promise<void> {
+  insertedUserIds.push(id);
   await db.execute(
     sql`INSERT INTO "users" ("id", "email", "created_at", "updated_at")
         VALUES (${id}, ${`${id}@squaads.com`}, now(), now())`,
@@ -41,13 +47,28 @@ async function insertMeeting(params: {
   status: MeetingStatus;
   createdAt: Date;
 }): Promise<void> {
+  insertedMeetingIds.push(params.id);
   await db.execute(
     sql`INSERT INTO "meetings" ("id", "url", "owner_id", "status", "created_at", "updated_at")
         VALUES (${params.id}, ${params.url}, ${params.ownerId}, ${params.status}, ${params.createdAt}, ${params.createdAt})`,
   );
 }
 
+/** Deletes meetings before users so the owner FK never blocks cleanup. */
+async function cleanupInsertedRows(): Promise<void> {
+  const meetingIds = insertedMeetingIds.splice(0);
+  const userIds = insertedUserIds.splice(0);
+  if (meetingIds.length > 0) {
+    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${sql.join(meetingIds, sql`, `)})`);
+  }
+  if (userIds.length > 0) {
+    await db.execute(sql`DELETE FROM "users" WHERE "id" IN (${sql.join(userIds, sql`, `)})`);
+  }
+}
+
 describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (requires `bun run infra:up`)", () => {
+  afterEach(cleanupInsertedRows);
+
   afterAll(async () => {
     if (dbAvailable) await pool.end();
   });
@@ -66,9 +87,6 @@ describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (req
 
     const result = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
     expect(result).toBeNull();
-
-    await db.execute(sql`DELETE FROM "meetings" WHERE "id" = ${meetingId}`);
-    await db.execute(sql`DELETE FROM "users" WHERE "id" IN (${ownerId}, ${otherOwnerId})`);
   });
 
   it("excludes a meeting created before createdAfter, includes one created after", async () => {
@@ -101,9 +119,6 @@ describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (req
 
     const freshResult = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
     expect(freshResult?.id).toBe(freshId);
-
-    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${staleId}, ${freshId})`);
-    await db.execute(sql`DELETE FROM "users" WHERE "id" = ${ownerId}`);
   });
 
   it("excludes a non-trackable status (completed) but includes transcription_error", async () => {
@@ -124,9 +139,6 @@ describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (req
 
     const errorResult = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
     expect(errorResult?.id).toBe(errorId);
-
-    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${completedId}, ${errorId})`);
-    await db.execute(sql`DELETE FROM "users" WHERE "id" = ${ownerId}`);
   });
 
   it("returns the most recent matching row when two valid rows exist (newest-first)", async () => {
@@ -144,9 +156,6 @@ describe.skipIf(!dbAvailable)("MeetingRepository.findTrackableByUrlAndOwner (req
 
     const result = await MeetingRepository.findTrackableByUrlAndOwner(url, ownerId, createdAfter);
     expect(result?.id).toBe(newerId);
-
-    await db.execute(sql`DELETE FROM "meetings" WHERE "id" IN (${olderId}, ${newerId})`);
-    await db.execute(sql`DELETE FROM "users" WHERE "id" = ${ownerId}`);
   });
 });
 
