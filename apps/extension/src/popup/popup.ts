@@ -2,7 +2,7 @@ import { resolveBadgeState } from "../shared/badge-policy";
 import { DEFAULT_SETTINGS, SEARCH_POLL_INTERVAL_MS, STATUS_LABELS } from "../shared/constants";
 import { detectMeetingProvider, normalizeMeetingUrl } from "../shared/meeting-url";
 import { logInfo, logWarn } from "../shared/logger";
-import { getConnectableSiteContext, normalizeOrigin } from "../shared/origin";
+import { getConnectableSiteContext, normalizeOrigin, toHostPermissionPattern } from "../shared/origin";
 import { getPopupMeetingEntryDecision } from "./meeting-entry-policy";
 import type {
   ActiveMeetingEntry,
@@ -389,6 +389,30 @@ async function connectFromPopup() {
       "wrong-site",
       `This token belongs to ${parsedToken.baseUrl}. Open that same Squaads dashboard tab and try again.`,
     );
+    renderConnectionStatus();
+    return;
+  }
+
+  // The backend origin is user-configured (self-hosted), so it can only live in
+  // `optional_host_permissions` — without the runtime grant every fetch to it dies
+  // as an opaque "Failed to fetch". `chrome.permissions.request` is only allowed
+  // while the click gesture is alive, which is why every guard above this line is
+  // synchronous: this is the first `await` in the whole click -> connect path.
+  // An already-granted origin resolves true without re-prompting the user.
+  const hostPattern = toHostPermissionPattern(targetOrigin);
+  let hostPermissionGranted = false;
+  try {
+    hostPermissionGranted = hostPattern
+      ? await chrome.permissions.request({ origins: [hostPattern] })
+      : false;
+  } catch {
+    hostPermissionGranted = false;
+  }
+
+  if (!hostPermissionGranted) {
+    const permissionMessage = `This extension needs your permission to reach ${targetOrigin}. Click Connect to Current Site again and choose Allow.`;
+    feedback.textContent = permissionMessage;
+    setTransientConnectionState("connect-error", permissionMessage);
     renderConnectionStatus();
     return;
   }

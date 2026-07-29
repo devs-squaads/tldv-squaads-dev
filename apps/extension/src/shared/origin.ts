@@ -17,6 +17,17 @@ export function normalizeOrigin(input: string): string {
   }
 }
 
+/**
+ * Chrome match pattern for a user-configured backend, e.g.
+ * `https://squaads.example.com/dashboard` -> `https://squaads.example.com/*`.
+ * Returns "" when the input is not a usable origin: `chrome.permissions.request`
+ * throws on a malformed pattern, so callers must skip the request instead.
+ */
+export function toHostPermissionPattern(baseUrl: string): string {
+  const origin = normalizeOrigin(baseUrl);
+  return origin ? `${origin}/*` : "";
+}
+
 export function getOriginFromUrl(url?: string): string {
   if (!url) return "";
   return normalizeOrigin(url);
