@@ -13,6 +13,19 @@ export class UserRepository {
     return user || null;
   }
 
+  /**
+   * Persists the identity side of a login only.
+   *
+   * The `google_access_token` / `google_refresh_token` / `google_token_expiry`
+   * columns are deliberately NOT written here: login requests identity scopes
+   * only (`openid email profile`), so writing its token would downgrade the
+   * `calendar.readonly` grant stored by the calendar-connect flow and leave the
+   * worker's calendar poller on 403 insufficient_scope. Those columns have a
+   * single owner — `CalendarAccountRepository.updateTokens`, called from
+   * `/api/settings/calendar-connect/callback`.
+   *
+   * The login token itself is not lost: it lives on the NextAuth JWT.
+   */
   static async upsertFromGoogle(profile: {
     id: string;
     name: string | null;
@@ -23,27 +36,15 @@ export class UserRepository {
     expiresAt?: number;
   }) {
     const now = new Date();
-    const tokenExpiry = profile.expiresAt
-      ? new Date(profile.expiresAt * 1000)
-      : null;
 
     const existing = await this.findByEmail(profile.email);
 
     if (existing) {
-      const updateData: Record<string, unknown> = {
+      const updateData = {
         name: profile.name,
         image: profile.image,
-        googleAccessToken: profile.accessToken,
         updatedAt: now,
       };
-
-      // Only update refresh token if we got a new one
-      if (profile.refreshToken) {
-        updateData.googleRefreshToken = profile.refreshToken;
-      }
-      if (tokenExpiry) {
-        updateData.googleTokenExpiry = tokenExpiry;
-      }
 
       await db.update(users).set(updateData).where(eq(users.id, existing.id));
       return { ...existing, ...updateData };
@@ -54,9 +55,6 @@ export class UserRepository {
       name: profile.name,
       email: profile.email,
       image: profile.image,
-      googleAccessToken: profile.accessToken,
-      googleRefreshToken: profile.refreshToken || null,
-      googleTokenExpiry: tokenExpiry,
       calendarEnabled: false, // Calendar is now a separate opt-in step from Settings
       createdAt: now,
       updatedAt: now,
