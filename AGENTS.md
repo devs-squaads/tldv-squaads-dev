@@ -22,7 +22,7 @@ resume con IA. Para equipos que quieren control y privacidad de sus grabaciones 
 - `bun run dev:remote` — web nativa contra el worker **desplegado** (`-dev`): carga `.env.development.remote`. No levanta infra local (usa DB/MinIO/worker remotos).
 - `bun run infra:up` / `infra:down` / `infra:reset` / `infra:logs` — controlan la infra en Docker (postgres + minio + worker). `infra:reset` borra los volúmenes de DB/MinIO y relevanta.
 - `bun run dev:web` / `bun run dev:worker` — arrancan un solo rol nativo (cargan el env de raíz con `bun --env-file`).
-- `bun test apps/__tests__` — ejecuta los tests (deben pasar antes de cada commit).
+- `bun run test` — ejecuta los tests (deben pasar antes de cada commit). Usa `--isolate`: `mock.module()` de Bun es global al proceso, así que sin aislar, un test que mockea un repositorio se lo impone a los demás archivos y las suites live-DB fallan según el orden de descubrimiento (se manifiesta en Linux/CI, no en Windows). No lances `bun test apps/__tests__` a secas.
 - `bun run lint` — revisa el estilo (antes de cada PR).
 - `bun run typecheck` — chequeo de tipos en todos los workspaces.
 - `bun run build:web` — compila el web para producción (`NODE_ENV=production`).

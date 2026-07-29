@@ -82,8 +82,7 @@ export function diff(prev: WidgetRenderState, next: WidgetRenderState): WidgetPa
  *
  * - 2s for transient phases (pending / joining / waiting_admission).
  * - 5s for stable phases (recording / transcribing / summarizing).
- * - 5s default for terminal statuses (the loop is stopped before the next
- *   tick, so this value is never used in practice — kept for totality).
+ * - 5s default for terminal statuses and recoverable transcription failures.
  */
 export function intervalFor(status: MeetingStatus): number {
   switch (status) {

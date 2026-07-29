@@ -12,6 +12,23 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Postgres matches the connection string hardcoded in `db:push` and defaulted by
+    # the live-DB tests, so their `describe.skipIf(!dbAvailable)` suites actually run
+    # in CI instead of silently skipping.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: meeting_bot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d meeting_bot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,14 +41,37 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Apply database schema
+        run: bun run db:push
+
       - name: Run tests
-        run: bun test apps/__tests__
+        run: bun run test
 
       - name: Run lint
         run: bun run lint
 
       - name: Run typecheck
         run: bun run typecheck
+
+      # The committed ZIP is a build artifact, so a PR can change apps/extension/src
+      # and leave the web serving a stale download. Raw ZIP bytes are not reproducible
+      # (the archive embeds timestamps), so compare the extracted trees instead.
+      - name: Verify committed extension ZIP matches extension source
+        run: |
+          set -euo pipefail
+          zip_path=apps/web/private-downloads/squaads-extension-internal.zip
+          committed_tree="$(mktemp -d)"
+          rebuilt_tree="$(mktemp -d)"
+          unzip -q "$zip_path" -d "$committed_tree"
+          cp "$zip_path" "$RUNNER_TEMP/committed-extension.zip"
+          bun run extension:build
+          unzip -q "$zip_path" -d "$rebuilt_tree"
+          # Restore the committed artifact so later steps never see a dirty tree.
+          mv "$RUNNER_TEMP/committed-extension.zip" "$zip_path"
+          if ! diff -r "$committed_tree" "$rebuilt_tree"; then
+            echo "::error::Committed extension ZIP is stale. Run 'bun run extension:build' and commit $zip_path."
+            exit 1
+          fi
 
       - name: Build worker image
         run: docker build --file Dockerfile.worker --tag meeting-bot-worker:ci .

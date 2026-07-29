@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertExtensionAccessAuthorized } from "@/services/extensionTokens";
 import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
-import { ACTIVE_PROCESSING_STATUSES } from "@meeting-bot/shared/domain/meetingStatus";
+import {
+  EXTENSION_TRACKABLE_FRESHNESS_MS,
+  EXTENSION_TRACKABLE_STATUSES,
+} from "@meeting-bot/shared/domain/meetingStatus";
 import { normalizeMeetingUrl } from "@meeting-bot/shared/meetingProvider";
 
 export const dynamic = "force-dynamic";
-
-const DEDUP_WINDOW_MS = 10 * 60 * 1000;
 
 export async function GET(req: NextRequest) {
   const auth = assertExtensionAccessAuthorized(req);
@@ -20,15 +21,19 @@ export async function GET(req: NextRequest) {
   }
 
   const normalizedUrl = normalizeMeetingUrl(url, provider);
-  const from = new Date(Date.now() - DEDUP_WINDOW_MS);
-  const meeting = await MeetingRepository.findActiveByUrlCreatedAfter(normalizedUrl, from);
+  const createdAfter = new Date(Date.now() - EXTENSION_TRACKABLE_FRESHNESS_MS);
+  const meeting = await MeetingRepository.findTrackableByUrlAndOwner(
+    normalizedUrl,
+    auth.payload.userId,
+    createdAfter,
+  );
 
   if (!meeting) {
     return NextResponse.json({ active: false, meeting: null, normalizedUrl });
   }
 
   return NextResponse.json({
-    active: ACTIVE_PROCESSING_STATUSES.includes(meeting.status),
+    active: EXTENSION_TRACKABLE_STATUSES.includes(meeting.status),
     normalizedUrl,
     meeting: {
       id: meeting.id,

@@ -71,9 +71,10 @@ describe("statusSync.intervalFor", () => {
     expect(intervalFor("summarizing")).toBe(5000);
   });
 
-  it("returns 5s default for terminal statuses (loop stops before next tick)", () => {
+  it("returns 5s for completed, terminal failures, and recoverable transcription failures", () => {
     expect(intervalFor("completed")).toBe(5000);
     expect(intervalFor("error")).toBe(5000);
+    expect(intervalFor("transcription_error")).toBe(5000);
   });
 });
 
@@ -154,6 +155,43 @@ describe("statusSync.transition", () => {
       { type: "disconnectPorts", meetingId: "m1" },
     ]);
     expect(result.state.meetings["m1"]).toBeUndefined();
+  });
+
+  it("POLL_RESPONSE transcription_error keeps polling and observes a later recovery", () => {
+    const state: SyncState = {
+      meetings: {
+        m1: { portIds: ["p1"], inFlight: true, lastStatus: "transcribing", interval: 5000 },
+      },
+    };
+
+    const failure = transition(state, {
+      type: "POLL_RESPONSE",
+      meetingId: "m1",
+      status: "transcription_error",
+    });
+
+    expect(failure.effects).toEqual([
+      { type: "broadcast", meetingId: "m1", status: "transcription_error" },
+    ]);
+    expect(failure.state.meetings["m1"]).toEqual({
+      portIds: ["p1"],
+      inFlight: false,
+      lastStatus: "transcription_error",
+      interval: 5000,
+    });
+
+    const tick = transition(failure.state, { type: "POLL_TICK", meetingId: "m1" });
+    expect(tick.effects).toEqual([{ type: "fetchMeeting", meetingId: "m1" }]);
+
+    const recovery = transition(tick.state, {
+      type: "POLL_RESPONSE",
+      meetingId: "m1",
+      status: "summarizing",
+    });
+    expect(recovery.effects).toEqual([
+      { type: "broadcast", meetingId: "m1", status: "summarizing" },
+    ]);
+    expect(recovery.state.meetings["m1"].lastStatus).toBe("summarizing");
   });
 
   it("POLL_RESPONSE with no request in flight is a no-op (stale response)", () => {

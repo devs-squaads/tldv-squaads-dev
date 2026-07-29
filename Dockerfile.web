@@ -41,6 +41,7 @@ COPY --from=builder /app/apps/web/.next/standalone ./apps/web/.next/standalone
 # Standalone server resolves static assets relative to its own app tree at runtime.
 COPY --from=builder /app/apps/web/public ./apps/web/.next/standalone/apps/web/public
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/standalone/apps/web/.next/static
+COPY --from=builder /app/apps/web/private-downloads ./apps/web/private-downloads
 
 EXPOSE 3000
 

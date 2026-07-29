@@ -36,6 +36,8 @@ export const ACTIVE_STATUSES: MeetingStatus[] = [
   "summarizing",
 ];
 
+export const TRACKABLE_STATUSES: MeetingStatus[] = [...ACTIVE_STATUSES, "transcription_error"];
+
 export const RETRYABLE_TERMINAL_STATUSES: MeetingStatus[] = ["admission_timeout", "rejected", "error"];
 
 export const STATUS_LABELS: Record<MeetingStatus, string> = {
@@ -49,6 +51,7 @@ export const STATUS_LABELS: Record<MeetingStatus, string> = {
   admission_timeout: "Admission timeout",
   rejected: "Rejected",
   error: "Error",
+  transcription_error: "Transcription error",
 };
 
 export const STATUS_COLORS: Record<MeetingStatus, string> = {
@@ -62,4 +65,5 @@ export const STATUS_COLORS: Record<MeetingStatus, string> = {
   admission_timeout: "#ef4444",
   rejected: "#ef4444",
   error: "#ef4444",
+  transcription_error: "#ef4444",
 };

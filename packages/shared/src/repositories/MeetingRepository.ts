@@ -1,7 +1,11 @@
 import { db } from "@meeting-bot/shared/db";
 import { meetings } from "@meeting-bot/shared/db/schema";
-import { and, eq, gte, inArray, isNotNull } from "drizzle-orm";
-import { ACTIVE_PROCESSING_STATUSES, type MeetingStatus } from "@meeting-bot/shared/domain/meetingStatus";
+import { and, desc, eq, gte, inArray, isNotNull } from "drizzle-orm";
+import {
+  ACTIVE_PROCESSING_STATUSES,
+  EXTENSION_TRACKABLE_STATUSES,
+  type MeetingStatus,
+} from "@meeting-bot/shared/domain/meetingStatus";
 
 export type MeetingRecord = typeof meetings.$inferSelect;
 export type MeetingInsert = typeof meetings.$inferInsert;
@@ -34,6 +38,28 @@ export class MeetingRepository {
           gte(meetings.createdAt, from)
         )
       )
+      .limit(1);
+
+    return meeting ?? null;
+  }
+
+  static async findTrackableByUrlAndOwner(
+    url: string,
+    ownerId: string,
+    createdAfter: Date,
+  ): Promise<MeetingRecord | null> {
+    const [meeting] = await db
+      .select()
+      .from(meetings)
+      .where(
+        and(
+          eq(meetings.url, url),
+          eq(meetings.ownerId, ownerId),
+          inArray(meetings.status, EXTENSION_TRACKABLE_STATUSES as Array<MeetingStatus>),
+          gte(meetings.createdAt, createdAfter)
+        )
+      )
+      .orderBy(desc(meetings.createdAt))
       .limit(1);
 
     return meeting ?? null;

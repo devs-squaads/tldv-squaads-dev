@@ -1,8 +1,9 @@
+import { resolveBadgeState } from "../shared/badge-policy";
 import {
-  ACTIVE_STATUSES,
   RETRYABLE_TERMINAL_STATUSES,
   STATUS_COLORS,
   STATUS_LABELS,
+  TRACKABLE_STATUSES,
 } from "../shared/constants";
 import { diff, type WidgetRenderState } from "../shared/status-sync";
 import { getWidgetPosition, saveWidgetPosition } from "../shared/storage";
@@ -253,8 +254,8 @@ export class MeetingWidget {
   }
 
   private syncBadge() {
-    if (this.state.type === "active" && this.state.status === "recording") {
-      void send({ type: "SET_BADGE", state: "recording" });
+    if (this.state.type === "active") {
+      void send({ type: "SET_BADGE", state: resolveBadgeState(this.state.status) });
       return;
     }
     if (this.state.type === "error") {
@@ -515,7 +516,7 @@ export class MeetingWidget {
       status: status.meeting.status,
     });
 
-    if (ACTIVE_STATUSES.includes(status.meeting.status)) {
+    if (TRACKABLE_STATUSES.includes(status.meeting.status)) {
       this.subscribe(status.meeting.id);
     }
   }
