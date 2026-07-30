@@ -12,14 +12,21 @@ describe("auth.ts allowlist gate", () => {
     isActive: input.isActive,
   }));
   const upsertUserFromGoogle = mock(async () => undefined);
+  // Deliberately NOT part of AuthCallbackDependencies anymore: the google_* token
+  // columns are owned by the calendar-connect flow. It is still passed here (as an
+  // extra property on a non-literal object, so no excess-property error) purely as
+  // a tripwire — if the callbacks ever reach for a token writer again, the
+  // "no DB write" assertions below fail instead of the regression shipping.
   const updateCalendarTokens = mock(async () => undefined);
 
-  const callbacks = createAuthCallbacks({
+  const dependencies = {
     findAuthorizedAccount,
     upsertAuthorizedAccount,
     upsertUserFromGoogle,
     updateCalendarTokens,
-  });
+  };
+
+  const callbacks = createAuthCallbacks(dependencies);
 
   beforeEach(() => {
     findAuthorizedAccount.mockReset();
@@ -252,7 +259,11 @@ describe("auth.ts allowlist gate", () => {
       expect((token as Record<string, unknown>).role).not.toBe("admin");
     });
 
-    it("refreshes an expiring access token and persists rotated tokens", async () => {
+    it("refreshes an expiring access token on the JWT without writing it to the DB", async () => {
+      // The login grant is identity-only (openid/email/profile). Persisting the
+      // refreshed token used to overwrite the calendar.readonly grant stored by
+      // the calendar-connect flow, leaving the poller on 403 insufficient_scope
+      // forever. The refreshed token now lives on the JWT and nowhere else.
       const now = 1_700_000_000_000;
       const dateNowSpy = spyOn(Date, "now").mockReturnValue(now);
       const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
@@ -267,11 +278,9 @@ describe("auth.ts allowlist gate", () => {
         } as never);
 
         expect((token as Record<string, unknown>).accessToken).toBe("fresh");
-        expect(updateCalendarTokens).toHaveBeenCalledWith("u-1", {
-          accessToken: "fresh",
-          expiresAt: now / 1000 + 3600,
-          refreshToken: "rotated",
-        });
+        expect((token as Record<string, unknown>).expiresAt).toBe(now / 1000 + 3600);
+        expect(updateCalendarTokens).not.toHaveBeenCalled();
+        expect(upsertUserFromGoogle).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();
         dateNowSpy.mockRestore();
