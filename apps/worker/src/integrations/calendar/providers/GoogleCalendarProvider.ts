@@ -187,7 +187,17 @@ export class GoogleCalendarProvider implements CalendarProvider {
         const auth = await GoogleCalendarProvider.getOAuth2ForUser(user);
         meetings.push(...(await GoogleCalendarProvider.fetchEvents(auth, params, "primary", user.id)));
       } catch (error) {
-        console.error(`[GoogleCalendarProvider] OAuth polling failed for ${user.email}:`, error);
+        // One line, no error object: this runs on every poll cycle (~60s) and
+        // logging the raw GaxiosError dumps its whole graph — response, headers
+        // and a ~1 KB `www-authenticate` scope string — making the deployment
+        // logs unreadable.
+        const failure = error as { status?: number; response?: { status?: number } } | null;
+        const status = failure?.status ?? failure?.response?.status;
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(
+          `[GoogleCalendarProvider] OAuth polling failed for ${user.email}` +
+            `${status ? ` (HTTP ${status})` : ""}: ${message}`,
+        );
       }
     }
 

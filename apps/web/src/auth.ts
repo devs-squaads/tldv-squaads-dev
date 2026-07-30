@@ -22,17 +22,10 @@ interface GoogleUserInput {
   expiresAt?: number;
 }
 
-interface CalendarTokens {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt?: number;
-}
-
 export interface AuthCallbackDependencies {
   findAuthorizedAccount(email: string): Promise<AuthorizedAccountSummary | null>;
   upsertAuthorizedAccount(input: AuthorizedAccountInput): Promise<AuthorizedAccountSummary>;
   upsertUserFromGoogle(input: GoogleUserInput): Promise<unknown>;
-  updateCalendarTokens(userId: string, tokens: CalendarTokens): Promise<unknown>;
 }
 
 export type AuthorizedAccountsDependencies = { getServerSession: typeof import("next-auth")["getServerSession"]; AuthorizedAccountRepository: Pick<typeof import("@meeting-bot/shared/repositories/AuthorizedAccountRepository")["AuthorizedAccountRepository"], "findAll" | "upsert"> };
@@ -57,12 +50,6 @@ const defaultAuthCallbackDependencies: AuthCallbackDependencies = {
   async upsertUserFromGoogle(input) {
     const { UserRepository } = await import("@/repositories/UserRepository");
     return UserRepository.upsertFromGoogle(input);
-  },
-  async updateCalendarTokens(userId, tokens) {
-    const { CalendarAccountRepository } = await import(
-      "@meeting-bot/shared/repositories/CalendarAccountRepository"
-    );
-    return CalendarAccountRepository.updateTokens(userId, tokens);
   },
 };
 
@@ -165,7 +152,11 @@ export function createAuthCallbacks(
         }
       }
 
-      // Check if token needs refresh
+      // Refresh the identity access token in place when it is about to expire.
+      // This stays on the JWT only: the google_* columns hold the separate
+      // calendar.readonly grant from Settings, and writing this identity-scoped
+      // token over them broke the worker's calendar polling with 403
+      // insufficient_scope.
       if (token.expiresAt && typeof token.expiresAt === "number") {
         const expiresIn = token.expiresAt * 1000 - Date.now();
         if (expiresIn < 5 * 60 * 1000 && token.refreshToken) {
@@ -186,15 +177,6 @@ export function createAuthCallbacks(
             if (data.access_token) {
               token.accessToken = data.access_token;
               token.expiresAt = Math.floor(Date.now() / 1000) + data.expires_in;
-
-              // Update in DB too
-              if (token.userId) {
-                await dependencies.updateCalendarTokens(token.userId as string, {
-                  accessToken: data.access_token,
-                  expiresAt: token.expiresAt as number,
-                  ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
-                });
-              }
             }
           } catch (error) {
             console.error("[Auth] Token refresh failed:", error);
