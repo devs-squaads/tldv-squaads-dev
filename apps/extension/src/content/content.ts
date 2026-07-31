@@ -1,49 +1,93 @@
 import { pickAdapter } from "./adapters";
+import type { MeetingPageAdapter } from "./adapters/types";
+import { planWidgetRestore } from "./restore-policy";
 import { MeetingWidget } from "./widget";
 import { logInfo } from "../shared/logger";
 import type { RuntimeMessage, RuntimeResponse } from "../shared/types";
 
+interface DetectedMeeting {
+  adapter: MeetingPageAdapter;
+  meetingUrl: string;
+  key: string;
+}
+
 let widget: MeetingWidget | null = null;
-let lastUrl = "";
 let lastMeetingKey = "";
+/**
+ * Meeting the user explicitly restored from the popup. While it is pinned, the
+ * `isInsideActiveMeeting()` text heuristic may not tear the widget down again —
+ * that heuristic is what removed it before the user asked for it back, so
+ * honouring it here would undo the restore on the next 1.5s tick.
+ */
+let pinnedMeetingKey = "";
+
+function detectMeeting(url: string): DetectedMeeting | null {
+  const adapter = pickAdapter(url);
+  const meetingUrl = adapter?.getMeetingUrl(url);
+  if (!adapter || !meetingUrl) return null;
+  return { adapter, meetingUrl, key: `${adapter.provider}:${meetingUrl}` };
+}
+
+function teardown() {
+  lastMeetingKey = "";
+  pinnedMeetingKey = "";
+  widget?.destroy();
+  widget = null;
+}
+
+function mount(meeting: DetectedMeeting): MeetingWidget {
+  widget?.destroy();
+  widget = new MeetingWidget(meeting.meetingUrl, meeting.adapter.provider);
+  lastMeetingKey = meeting.key;
+  return widget;
+}
 
 async function refreshForUrl(url: string) {
-  const adapter = pickAdapter(url);
-  if (!adapter) {
-    lastUrl = url;
-    lastMeetingKey = "";
-    widget?.destroy();
-    widget = null;
+  const meeting = detectMeeting(url);
+  if (!meeting) {
+    teardown();
     return;
   }
 
-  const meetingUrl = adapter.getMeetingUrl(url);
-  if (!meetingUrl || !adapter.isInsideActiveMeeting()) {
-    lastUrl = url;
-    lastMeetingKey = "";
-    widget?.destroy();
-    widget = null;
+  if (!meeting.adapter.isInsideActiveMeeting() && pinnedMeetingKey !== meeting.key) {
+    teardown();
     return;
   }
 
-  const key = `${adapter.provider}:${meetingUrl}`;
-  const sameMeeting = widget && key === lastMeetingKey;
-  if (sameMeeting) {
-    lastUrl = url;
+  if (widget && meeting.key === lastMeetingKey) {
     widget.sync();
     return;
   }
 
-  if (widget) {
-    widget.destroy();
-    widget = null;
+  const mounted = mount(meeting);
+  logInfo("widget mounted", { provider: meeting.adapter.provider, meetingUrl: meeting.meetingUrl });
+  await mounted.bootstrap();
+}
+
+async function restoreWidget(): Promise<RuntimeResponse> {
+  const meeting = detectMeeting(window.location.href);
+  const plan = planWidgetRestore(Boolean(widget), meeting !== null);
+
+  if (plan.action === "expand") {
+    widget?.restore();
+    return { ok: true };
   }
 
-  widget = new MeetingWidget(meetingUrl, adapter.provider);
-  lastUrl = url;
-  lastMeetingKey = key;
-  logInfo("widget mounted", { provider: adapter.provider, meetingUrl });
-  await widget.bootstrap();
+  if (plan.action === "reject") {
+    return { ok: false, error: plan.reason };
+  }
+
+  // `rebuild` is only planned when a meeting was detected.
+  if (!meeting) return { ok: false, error: "No meeting detected in this tab." };
+
+  const mounted = mount(meeting);
+  pinnedMeetingKey = meeting.key;
+  logInfo("widget rebuilt from popup", {
+    provider: meeting.adapter.provider,
+    meetingUrl: meeting.meetingUrl,
+  });
+  await mounted.bootstrap();
+  return { ok: true };
 }
 
 function start() {
@@ -55,8 +99,9 @@ function start() {
 
 chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResponse) => {
   if (message.type === "RESTORE_WIDGET") {
-    widget?.restore();
-    sendResponse({ ok: true } satisfies RuntimeResponse);
+    // Rebuilding mounts a widget and awaits its bootstrap, so the reply is async;
+    // returning true keeps the message channel open until it resolves.
+    void restoreWidget().then(sendResponse);
     return true;
   }
 
