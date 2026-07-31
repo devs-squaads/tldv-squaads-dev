@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Squaads Bot Assistant",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Invite the Squaads bot from Google Meet, Microsoft Teams, or Zoom Web.",
   "icons": {
     "16": "assets/squaads-icon.png",

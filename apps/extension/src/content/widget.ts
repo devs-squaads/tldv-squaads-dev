@@ -87,6 +87,18 @@ export class MeetingWidget {
       this.hovered = false;
       this.scheduleIdleVisuals();
     });
+    // Bound to the host, not to the collapsed pill, for two reasons:
+    // `beginDrag` calls `host.setPointerCapture()` on every pointerdown, which
+    // retargets the pointerup — and therefore the derived click/dblclick — to the
+    // host, so a listener on the button itself never fires; and the host survives
+    // `mount()`, which replaces innerHTML and would drop per-render listeners.
+    // Double-click rather than click: the pill is draggable, and the browser fires
+    // click whenever pointerdown and pointerup share an element no matter how far
+    // it travelled, so a single click binding expands it on every reposition.
+    this.host.addEventListener("dblclick", () => {
+      if (!this.collapsed) return;
+      this.expand();
+    });
     void this.restorePosition();
     this.scheduleIdleVisuals();
     this.mount();
@@ -425,14 +437,13 @@ export class MeetingWidget {
 
     if (this.collapsed) {
       this.host.innerHTML = `
-        <button id="squaads-expand-btn" style="display:flex;gap:10px;align-items:center;padding:11px 14px;border-radius:999px;border:1px solid rgba(148,163,184,.18);background:linear-gradient(145deg, rgba(8,15,29,.94), rgba(12,25,44,.88));color:#f8fafc;box-shadow:0 24px 60px rgba(2,8,23,.45);cursor:pointer;max-width:280px;backdrop-filter:blur(18px);">
+        <button id="squaads-expand-btn" title="Double-click to expand · drag to move" style="display:flex;gap:10px;align-items:center;padding:11px 14px;border-radius:999px;border:1px solid rgba(148,163,184,.18);background:linear-gradient(145deg, rgba(8,15,29,.94), rgba(12,25,44,.88));color:#f8fafc;box-shadow:0 24px 60px rgba(2,8,23,.45);cursor:pointer;max-width:280px;backdrop-filter:blur(18px);">
           <span data-squaads-indicator style="width:10px;height:10px;border-radius:999px;background:${indicator};display:inline-block;flex:0 0 auto;box-shadow:0 0 16px ${indicator};"></span>
           <span data-squaads-message style="font-size:12px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700;">${message}</span>
         </button>
       `;
 
       const expandButton = this.host.querySelector("#squaads-expand-btn");
-      expandButton?.addEventListener("click", () => this.expand());
       expandButton?.addEventListener("pointerdown", (event) => this.beginDrag(event as PointerEvent));
       this.applyPosition();
       this.syncVisualState();
