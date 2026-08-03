@@ -86,7 +86,7 @@ export class GoogleMeet extends OnlineMeetingProvider {
             console.log('No credentials provided, skipping Google login');
             return;
         }
-        await this.page.goto('https://accounts.google.com', { waitUntil: 'networkidle2' })
+        await this.page.goto('https://accounts.google.com', { waitUntil: 'domcontentloaded' })
         await this.page.waitForSelector('input[type="email"]')
         await this.page.type('input[type="email"]', username)
         await this.page.click('#identifierNext')
@@ -98,7 +98,9 @@ export class GoogleMeet extends OnlineMeetingProvider {
 
     async joinMeeting(meetingUrl: string, botName: string) {
         console.log(`[GoogleMeet] Joining ${meetingUrl} as ${botName}`);
-        await this.page.goto(meetingUrl, { waitUntil: 'networkidle2' })
+        // Meet nunca alcanza networkidle (WebRTC + telemetría constantes): usar
+        // domcontentloaded evita el Navigation timeout de 30s en page.goto.
+        await this.page.goto(meetingUrl, { waitUntil: 'domcontentloaded' })
         await this.wait(5000)
 
         // 1. Dismiss initial "Got it" / "Entendido" tooltip if present
