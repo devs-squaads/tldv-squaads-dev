@@ -77,4 +77,27 @@ describe("parseDictionaryPairs", () => {
     const pairs = parseDictionaryPairs('"solo errónea" =>');
     expect(pairs).toEqual([]);
   });
+
+  it("keeps pairs whose values contain commas intact (regression: split by comma)", () => {
+    const pairs = parseDictionaryPairs('"excelsic" => "Excel, CSV"');
+    expect(pairs).toEqual([{ wrong: "excelsic", correct: "Excel, CSV" }]);
+  });
+
+  it("keeps pairs whose values contain semicolons intact (regression: split by ;)", () => {
+    const pairs = parseDictionaryPairs('"make m8n" => "Make; n8n"');
+    expect(pairs).toEqual([{ wrong: "make m8n", correct: "Make; n8n" }]);
+  });
+
+  it("does not leak comma-split fragments into dictionary terms (regression)", () => {
+    const terms = parseTranscriptionDictionary('"yemania, Piquín" => "Gemini API key"\n"excelsic" => "Excel, CSV"');
+    expect(terms).toContain("Gemini API key");
+    expect(terms).toContain("Excel, CSV");
+    expect(terms.some((t) => t.includes('"' ))).toBe(false);
+    expect(terms.some((t) => t === "CSV" || t === 'CSV"')).toBe(false);
+  });
+
+  it("still supports plain terms separated by commas (legacy)", () => {
+    const terms = parseTranscriptionDictionary("Squaads, Deepgram");
+    expect(terms).toEqual(["Squaads", "Deepgram"]);
+  });
 });
