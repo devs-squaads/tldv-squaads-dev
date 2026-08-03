@@ -58,7 +58,16 @@ export abstract class OnlineMeetingProvider {
         console.log(`[${options.providerName}] Waiting for admission/participants before recording...`);
 
         while (Date.now() - startedAt < timeoutMs) {
-            const state = await options.inspectState();
+            let state: AdmissionState;
+            try {
+                state = await options.inspectState();
+            } catch (err) {
+                // The tab lost its page/context (meeting ended or bot was kicked before
+                // admission) — treat it the same as a timeout instead of crashing the run.
+                const message = err instanceof Error ? err.message : 'Unknown error';
+                console.log(`[${options.providerName}] Lost the page while waiting for admission (meeting likely ended): ${message}`);
+                break;
+            }
             const inMeeting =
                 state.participantsCount >= minParticipants &&
                 !state.hasJoinRequestButton &&
@@ -239,7 +248,18 @@ export abstract class OnlineMeetingProvider {
                     return;
                 }
 
-                if (await this.imAlone()) {
+                let isOut: boolean;
+                try {
+                    isOut = await this.imAlone();
+                } catch (err) {
+                    // The page/context is gone (meeting ended or bot was kicked) — stop
+                    // recording cleanly instead of leaving an unhandled rejection in the interval.
+                    const message = err instanceof Error ? err.message : 'Unknown error';
+                    console.log(`[OnlineMeetingProvider] Lost the page while checking participants (meeting likely ended): ${message}`);
+                    isOut = true;
+                }
+
+                if (isOut) {
                     console.log('[OnlineMeetingProvider] I am alone, stopping recording')
                     await stopRecording();
                     return

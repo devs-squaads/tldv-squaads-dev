@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch run src/runner.ts",
-    "start": "bun run src/runner.ts"
+    "start": "bun run src/runner.ts",
+    "dictionary:refine": "bun run src/scripts/refineDictionary.ts"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.0.0",

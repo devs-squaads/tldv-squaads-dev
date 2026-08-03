@@ -144,7 +144,9 @@ export default function TranscriptionContextCard() {
             Diccionario de términos
           </CardTitle>
           <CardDescription>
-            Palabras clave, nombres propios, siglas o jerga técnica para mejorar precisión.
+            Palabras clave, nombres propios, siglas o jerga técnica para mejorar precisión. También correcciones
+            <code className="font-mono"> errónea =&gt; correcta </code>
+            (una por línea).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -153,7 +155,7 @@ export default function TranscriptionContextCard() {
             <textarea
               value={dictionary}
               onChange={(e) => setDictionary(e.target.value)}
-              placeholder={"Squaads\nKubernetes\nDeepgram\nSLA\nMVP\n..."}
+              placeholder={"Squaads\nKubernetes\nDeepgram\nSLA\nMVP\n\"tldv\" => \"tl·dv\"\n\"squads\" => \"SQUAADS\"\n..."}
               rows={6}
               disabled={loading}
               className="w-full rounded-[var(--radius)] px-3 py-2 text-sm font-mono placeholder:text-[var(--muted-foreground)] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00F2FF]/50 resize-y transition-all disabled:opacity-50"
@@ -165,7 +167,7 @@ export default function TranscriptionContextCard() {
               }}
             />
             <p className="text-xs text-[var(--muted-foreground)]">
-              Acepta saltos de línea, comas o punto y coma. También JSON: <code className="font-mono">[&quot;Squaads&quot;, &quot;SLA&quot;]</code>.
+              Acepta saltos de línea, comas o punto y coma. También JSON: <code className="font-mono">[&quot;Squaads&quot;, &quot;SLA&quot;]</code> y correcciones <code className="font-mono">&quot;errónea&quot; =&gt; &quot;correcta&quot;</code> (se aplican siempre al refinar).
             </p>
           </div>
 

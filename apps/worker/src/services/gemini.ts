@@ -183,17 +183,19 @@ async function generateWithGroq(
 
 /**
  * Formats a timestamped transcription for the AI prompt.
- * Converts segments into "[MM:SS] text" format so AI can assign accurate timestamps.
+ * Converts segments into "[MM:SS] text" (or "Speaker [MM:SS]: text" when the
+ * segment carries a speaker label) so AI can assign accurate timestamps.
  */
 export function formatTimestampedTranscript(
-  segments: Array<{ start: number; end: number; text: string }>
+  segments: Array<{ start: number; end: number; text: string; speaker?: string }>
 ): string {
   return segments
     .map((s) => {
       const mins = Math.floor(s.start / 60);
       const secs = Math.floor(s.start % 60);
       const ts = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-      return `[${ts}] ${s.text}`;
+      const prefix = s.speaker ? `${s.speaker} ` : "";
+      return `${prefix}[${ts}] ${s.text}`;
     })
     .join("\n");
 }
@@ -249,20 +251,27 @@ function buildRefinerPrompt(
   rawTranscript: string,
   context: string,
   dictionaryTerms?: string[],
+  dictionaryPairs?: Array<{ wrong: string; correct: string }>,
 ): string {
   const dictionaryBlock =
     dictionaryTerms && dictionaryTerms.length > 0
       ? `\n\nTERMINOLOGÍA:\n${dictionaryTerms.map((t) => `- ${t}`).join("\n")}`
       : "";
 
+  const pairsBlock = dictionaryPairs && dictionaryPairs.length > 0
+    ? `\n\nCORRECCIONES OBLIGATORIAS DE TERMINOLOGÍA (si el audio dice la forma errónea, escribe SIEMPRE la forma correcta):\n${dictionaryPairs
+        .map((p) => `- "${p.wrong}" → "${p.correct}"`)
+        .join("\n")}`
+    : "";
+
   return `Ejecutá AL PIE DE LA LETRA estas instrucciones sobre la transcripción. Devolvé SOLO el texto resultante, sin explicaciones ni markdown.
 
-Reglas: preservá timestamps [MM:SS], marcá ruido ASR como [inaudible], mantené el idioma original.
+Reglas: preservá timestamps [MM:SS] y etiquetas de hablante (formato \`Nombre [MM:SS]: texto\`), marcá ruido ASR como [inaudible], mantené el idioma original.
 
 INSTRUCCIONES:
 """
 ${context}
-"""${dictionaryBlock}
+"""${dictionaryBlock}${pairsBlock}
 
 TRANSCRIPCIÓN BRUTA:
 """
@@ -274,12 +283,13 @@ async function refineWithGroq(
   rawTranscript: string,
   context: string,
   dictionaryTerms?: string[],
+  dictionaryPairs?: Array<{ wrong: string; correct: string }>,
 ): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY no está configurada");
 
   const groq = new Groq({ apiKey });
-  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms);
+  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms, dictionaryPairs);
 
   const result = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
@@ -299,6 +309,7 @@ async function refineWithGemini(
   rawTranscript: string,
   context: string,
   dictionaryTerms?: string[],
+  dictionaryPairs?: Array<{ wrong: string; correct: string }>,
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY no está configurada");
@@ -309,7 +320,7 @@ async function refineWithGemini(
     generationConfig: { temperature: 0.2 },
   });
 
-  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms);
+  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms, dictionaryPairs);
   const result = await model.generateContent(prompt);
   const text = result.response.text().trim();
 
@@ -327,11 +338,12 @@ export async function refineTranscriptWithGemini(
   rawTranscript: string,
   context: string,
   dictionaryTerms?: string[],
+  dictionaryPairs?: Array<{ wrong: string; correct: string }>,
 ): Promise<string> {
   // Try Groq first (generous free tier)
   if (process.env.GROQ_API_KEY) {
     try {
-      return await refineWithGroq(rawTranscript, context, dictionaryTerms);
+      return await refineWithGroq(rawTranscript, context, dictionaryTerms, dictionaryPairs);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[refineTranscript] Groq failed (${msg}), falling back to Gemini...`);
@@ -340,7 +352,7 @@ export async function refineTranscriptWithGemini(
 
   // Fallback to Gemini
   if (process.env.GEMINI_API_KEY) {
-    return await refineWithGemini(rawTranscript, context, dictionaryTerms);
+    return await refineWithGemini(rawTranscript, context, dictionaryTerms, dictionaryPairs);
   }
 
   throw new Error("No hay API key configurada (GROQ_API_KEY o GEMINI_API_KEY)");

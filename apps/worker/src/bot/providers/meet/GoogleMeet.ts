@@ -216,50 +216,59 @@ export class GoogleMeet extends OnlineMeetingProvider {
         console.log(`[GoogleMeet] Waiting for admission (timeout: ${admissionTimeoutMs / 1000}s)...`);
 
         while (Date.now() < deadline) {
-            const state = await this.page.evaluate(() => {
-                const bodyText = (document.body.innerText || '').toLowerCase();
+            let state: string;
+            try {
+                state = await this.page.evaluate(() => {
+                    const bodyText = (document.body.innerText || '').toLowerCase();
 
-                // Rejected signals
-                const rejectedSignals = [
-                    'you can\'t join this call',
-                    'no puedes unirte a esta llamada',
-                    'your request to join was denied',
-                    'se ha denegado tu solicitud',
-                    'the meeting host denied your request',
-                    'el organizador ha denegado tu solicitud',
-                    'not allowed to join',
-                    'no tienes permiso para unirte',
-                ];
-                const isRejected = rejectedSignals.some(s => bodyText.includes(s));
-                if (isRejected) return 'rejected';
+                    // Rejected signals
+                    const rejectedSignals = [
+                        'you can\'t join this call',
+                        'no puedes unirte a esta llamada',
+                        'your request to join was denied',
+                        'se ha denegado tu solicitud',
+                        'the meeting host denied your request',
+                        'el organizador ha denegado tu solicitud',
+                        'not allowed to join',
+                        'no tienes permiso para unirte',
+                    ];
+                    const isRejected = rejectedSignals.some(s => bodyText.includes(s));
+                    if (isRejected) return 'rejected';
 
-                // Still waiting for admission
-                const waitingSignals = [
-                    'solicitaste unirte',
-                    'asked to join',
-                    'waiting to be admitted',
-                    'esperando a que te admitan',
-                    'asking to be let in',
-                    'pidiendo que te dejen entrar',
-                ];
-                const isWaiting = waitingSignals.some(s => bodyText.includes(s));
-                if (isWaiting) return 'waiting';
+                    // Still waiting for admission
+                    const waitingSignals = [
+                        'solicitaste unirte',
+                        'asked to join',
+                        'waiting to be admitted',
+                        'esperando a que te admitan',
+                        'asking to be let in',
+                        'pidiendo que te dejen entrar',
+                    ];
+                    const isWaiting = waitingSignals.some(s => bodyText.includes(s));
+                    if (isWaiting) return 'waiting';
 
-                // Check if we're inside the meeting (participants visible)
-                const participantsCount = document.querySelectorAll('div[data-participant-id]').length;
-                if (participantsCount >= 2) return 'admitted';
+                    // Check if we're inside the meeting (participants visible)
+                    const participantsCount = document.querySelectorAll('div[data-participant-id]').length;
+                    if (participantsCount >= 2) return 'admitted';
 
-                // Check for join buttons still present (pre-join screen)
-                const buttons = Array.from(document.querySelectorAll('button'));
-                const hasJoinButton = buttons.some(b => {
-                    const txt = (b.textContent || '').trim().toLowerCase();
-                    return ['ask to join', 'join now', 'solicitar unirse', 'unirme ahora']
-                        .some(t => txt.includes(t));
+                    // Check for join buttons still present (pre-join screen)
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const hasJoinButton = buttons.some(b => {
+                        const txt = (b.textContent || '').trim().toLowerCase();
+                        return ['ask to join', 'join now', 'solicitar unirse', 'unirme ahora']
+                            .some(t => txt.includes(t));
+                    });
+                    if (hasJoinButton) return 'pre_join';
+
+                    return 'unknown';
                 });
-                if (hasJoinButton) return 'pre_join';
-
-                return 'unknown';
-            });
+            } catch (err) {
+                // The tab lost its page/context (meeting ended or bot was kicked before
+                // admission) — treat it the same as a timeout instead of crashing the run.
+                const message = err instanceof Error ? err.message : 'Unknown error';
+                console.log(`[GoogleMeet] Lost the page while waiting for admission (meeting likely ended): ${message}`);
+                break;
+            }
 
             if (state === 'rejected') {
                 console.log('[GoogleMeet] Host REJECTED the bot entry.');
