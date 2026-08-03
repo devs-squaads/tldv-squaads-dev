@@ -11,6 +11,11 @@ import {
   getTranscriptionSettings,
   type TranscriptionSettings,
 } from "@meeting-bot/shared/services/transcriptionSettings";
+import { applyDictionaryPairs } from "@meeting-bot/shared/services/dictionaryRefinement";
+import {
+  attributeSpeakersToSegments,
+  isSpeakerAttributionEnabled,
+} from "@/services/speakerAttribution";
 
 export function hasTranscriptionProvider(): boolean {
   return TranscriptionProviderFactory.isConfigured();
@@ -59,17 +64,22 @@ export async function loadGlobalTranscriptionSettings(): Promise<TranscriptionSe
 /**
  * Applies context/dictionary-based refinement over the timestamped transcript.
  * Safe: if the refiner fails or no context is configured, returns the input unchanged.
+ * Dictionary pairs (errónea => correcta) se aplican de forma determinista ANTES
+ * del LLM, de modo que una corrección conocida se aplica aunque el LLM falle.
  */
 export async function refineTranscriptionResult(
   transcription: TranscriptionProviderResult,
   settings: TranscriptionSettings,
 ): Promise<TranscriptionProviderResult> {
   const context = settings.context?.trim();
-  if (!context) {
+  if (!context && !settings.dictionaryPairs?.length) {
     return transcription;
   }
 
-  const rawInput = serializeTranscript(transcription.segments, transcription.text);
+  const rawInput = applyDictionaryPairs(
+    serializeTranscript(transcription.segments, transcription.text),
+    settings.dictionaryPairs || [],
+  );
   if (!rawInput.trim()) {
     return transcription;
   }
@@ -79,6 +89,7 @@ export async function refineTranscriptionResult(
       rawInput,
       context,
       settings.dictionaryTerms,
+      settings.dictionaryPairs,
     );
 
     if (!refinedText || refinedText === rawInput) {
@@ -122,13 +133,49 @@ export async function transcribeRecording(
   options?: TranscriptionProviderOptions,
 ): Promise<TranscriptionProviderResult> {
   const provider = TranscriptionProviderFactory.getProvider();
+  let result: TranscriptionProviderResult;
+
   if (provider.transcribeDetailed) {
-    return provider.transcribeDetailed(filePath, options);
+    result = await provider.transcribeDetailed(filePath, options);
+  } else {
+    const text = await provider.transcribe(filePath, options);
+    result = {
+      text,
+      segments: [],
+    };
   }
 
-  const text = await provider.transcribe(filePath, options);
-  return {
-    text,
-    segments: [],
-  };
+  return attributeSpeakersIfNeeded(result);
+}
+
+/**
+ * Si los segmentos no traen hablante (Groq Whisper no diariza) y la atribución
+ * está habilitada, la ejecuta vía LLM. Cualquier fallo degrada silenciosamente
+ * al resultado original (nunca rompe el pipeline).
+ */
+export async function attributeSpeakersIfNeeded(
+  result: TranscriptionProviderResult,
+): Promise<TranscriptionProviderResult> {
+  const hasSegments = Array.isArray(result.segments) && result.segments.length > 0;
+  if (!hasSegments || !isSpeakerAttributionEnabled()) {
+    return result;
+  }
+
+  const allHaveSpeakers = result.segments.every((s: TranscriptionSegment) => Boolean(s.speaker));
+  if (allHaveSpeakers) {
+    return result;
+  }
+
+  try {
+    const attributed = await attributeSpeakersToSegments(result.segments);
+    return {
+      ...result,
+      segments: attributed,
+      text: formatTimestampedTranscript(attributed),
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[transcribeRecording] Speaker attribution failed, keeping raw transcript: ${message}`);
+    return result;
+  }
 }
