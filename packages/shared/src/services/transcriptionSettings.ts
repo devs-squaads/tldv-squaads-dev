@@ -135,7 +135,11 @@ export function parseDictionaryPairs(value: string): DictionaryPair[] {
     // no es JSON → parsear por líneas
   }
 
-  for (const line of trimmed.split(/[\n;]+/)) {
+  // Solo líneas: los pares se parsean línea a línea SIN partir por comas/punto y
+  // coma, porque un par puede contenerlos dentro de wrong/correct
+  // (ej. "excelsic" => "Excel, CSV"). El split por separadores solo aplica a
+  // términos planos (sin "=>"), en parseTranscriptionDictionary.
+  for (const line of trimmed.split("\n")) {
     const pair = parsePairLine(line);
     if (pair) pairs.push(pair);
   }
@@ -180,11 +184,17 @@ export function parseTranscriptionDictionary(value: string): string[] {
     return uniqueTerms([...jsonTerms, ...pairCorrect]);
   }
 
-  // Líneas que no son pares → términos planos
-  const bareTerms = trimmed
-    .split(/[\n,;]+/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.includes("=>"));
+  // Términos planos: líneas SIN "=>", partidas por comas/punto y coma (legacy:
+  // "Squaads, Deepgram"). Las líneas con "=>" son pares y NO se parten por
+  // comas (un par puede contenerlas dentro de wrong/correct).
+  const bareTerms: string[] = [];
+  for (const line of trimmed.split("\n")) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.includes("=>")) {
+      continue;
+    }
+    bareTerms.push(...trimmedLine.split(/[,;]+/).map((s) => s.trim()).filter(Boolean));
+  }
 
   return uniqueTerms([...bareTerms, ...pairCorrect]);
 }
