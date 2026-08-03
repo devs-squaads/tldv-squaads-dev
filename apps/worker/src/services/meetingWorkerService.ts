@@ -19,6 +19,7 @@ import {
 } from "@/services/meetingAiProcessingService";
 import { SummaryProviderFactory } from "@/integrations/ai/summary/SummaryProviderFactory";
 import { WorkerMeetingRepository } from "@/repositories/WorkerMeetingRepository";
+import { accumulateDictionaryCandidates } from "@/services/dictionaryCandidateCollection";
 
 function isAdmissionRejection(error: unknown): boolean {
   if (error instanceof Error) {
@@ -134,6 +135,25 @@ async function processMeetingAsync({
 
       const transcription = await refineTranscriptionResult(rawTranscription, settings);
       const transcript = serializeTranscript(transcription.segments, transcription.text);
+
+      // Auto-refinamiento del diccionario (feature 014): compara raw vs clean,
+      // detecta patrones de error y acumula candidatos. NUNCA rompe el pipeline.
+      try {
+        const rawTranscriptText = serializeTranscript(rawTranscription.segments, rawTranscription.text);
+        const newSuggestions = await accumulateDictionaryCandidates(
+          rawTranscriptText,
+          transcript,
+          settings.dictionaryPairs || [],
+        );
+        if (newSuggestions.length > 0) {
+          console.log(
+            `[dictionary] Meeting ${meetingId}: ${newSuggestions.length} candidatos de corrección detectados`,
+          );
+        }
+      } catch (dictionaryError: unknown) {
+        const msg = dictionaryError instanceof Error ? dictionaryError.message : String(dictionaryError);
+        console.warn(`[dictionary] Candidate collection failed for meeting ${meetingId}: ${msg}`);
+      }
 
       if (!hasSummaryProvider()) {
         await MeetingRepository.updateById(meetingId, {

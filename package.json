@@ -22,6 +22,7 @@
     "start": "bun run start:web",
     "start:web": "bun run --cwd apps/web start",
     "start:worker": "bun run --cwd apps/worker start",
+    "dictionary:refine": "bun run --cwd apps/worker dictionary:refine",
     "typecheck": "bunx tsc -p packages/shared/tsconfig.json --noEmit && bunx tsc -p apps/worker/tsconfig.json --noEmit && bunx tsc -p apps/web/tsconfig.json --noEmit && bunx tsc -p apps/extension/tsconfig.json --noEmit",
     "test": "bun test apps/__tests__ --isolate",
     "lint": "eslint apps/web/src apps/worker/src apps/extension/src apps/__tests__ packages/shared/src"

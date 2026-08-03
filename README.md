@@ -169,6 +169,10 @@ bun test apps/__tests__
 
 # Build de producción del web
 bun run build:web
+
+# Auto-refinamiento del diccionario de transcripción (reporte; --commit promueve)
+bun run dictionary:refine
+bun run dictionary:refine --commit
 ```
 
 ## Variables de Entorno Principales
@@ -227,14 +231,35 @@ bun run build:web
 | `NEXT_PUBLIC_DEV_AUTH_BYPASS`                                 | `true` para mostrar el botón "Entrar sin Google (dev)" en `/login`. Solo cosmético — la variable server-side de arriba es la que realmente habilita el provider. |
 | `GOOGLE_CALENDAR_ID`                                          | Calendar ID a consultar (`primary` si no se define).                                                                                           |
 | `GOOGLE_CALENDAR_IMPERSONATE_USER`                            | Opcional: solo para Domain-Wide Delegation (Google Workspace). Si el calendario se comparte con la Service Account, dejar vacío.               |
-| `GROQ_API_KEY`                                                | Proveedor principal de transcripción (Whisper) y primera opción actual en resumen del worker (Llama).                                          |
-| `GEMINI_API_KEY`                                              | Fallback actual de resumen en worker y proveedor de chat cuando se selecciona `CHAT_PROVIDER=gemini`.                                          |
-| `OPENAI_API_KEY`                                              | Fallback opcional adicional para resumen.                                                                                                      |
+| `GROQ_API_KEY`                                                | Proveedor principal de transcripción (Whisper) y primera opción actual en resumen del worker (Llama). |
+| `GEMINI_API_KEY`                                              | Fallback actual de resumen en worker y proveedor de chat cuando se selecciona `CHAT_PROVIDER=gemini`. |
+| `OPENAI_API_KEY`                                              | Fallback opcional adicional para resumen. |
+| `DEEPGRAM_API_KEY`                                            | Proveedor alternativo de transcripción (con diarización de hablantes nativa vía `transcribeDetailed`). |
+| `SPEAKER_ATTRIBUTION_ENABLED`                                 | `true` (default) ejecuta atribución de hablantes por LLM cuando el proveedor ASR no diariza (Groq Whisper). `false` la desactiva. Nunca rompe el pipeline: si falla, la transcripción conserva el formato `[MM:SS] texto`. |
 
 ### Resumen IA (worker): orden actual de providers
 
 - En el pipeline actual del worker, `generateSummary()` intenta **Groq primero** y usa **Gemini como fallback**.
 - Si ambos fallan o no están configurados, el resumen falla con error explícito de provider no configurado.
+
+### Diarización y diccionario de transcripción (feature 014)
+
+- **Diarización**: cada segmento de transcripción puede llevar hablante (`TranscriptionSegment.speaker`).
+  - Deepgram (`transcribeDetailed`) extrae los speakers nativos de `diarize: true` y los agrupa en turnos
+    (`Participante 1`, `Participante 2`, …).
+  - Groq Whisper no diariza: el worker ejecuta atribución de hablantes por LLM (Groq → Gemini fallback)
+    cuando `SPEAKER_ATTRIBUTION_ENABLED !== "false"`. Si falla, degrada silenciosamente al formato
+    `[MM:SS] texto`.
+  - Formato serializado con hablante: `Participante 1 [MM:SS]: texto` (misma convención que nuestras
+    transcripciones limpias). El resumen y los capítulos heredan la atribución automáticamente.
+- **Diccionario de correcciones** (`errónea => correcta`): además de términos planos, el diccionario de
+  Settings acepta líneas `"errónea" => "correcta"` o JSON de pares. El refiner los recibe como
+  correcciones obligatorias y el pipeline los aplica de forma determinista (límite de palabra,
+  case-insensitive) ANTES del LLM — una corrección conocida se aplica aunque el LLM falle.
+- **Auto-refinamiento**: tras cada reunión, el worker compara la transcripción cruda vs la refinada,
+  detecta patrones de error recurrentes y acumula candidatos (`transcription_dictionary_candidates` en
+  settings). El CLI `bun run dictionary:refine` muestra el reporte; `--commit` promueve los top 20 al
+  diccionario (dedup contra pares existentes). El commit es manual a propósito.
 
 ## Chat runtime operativo (provider + policy)
 
