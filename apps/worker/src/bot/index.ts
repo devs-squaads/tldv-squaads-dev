@@ -70,6 +70,9 @@ export async function startBot(options: BotOptions): Promise<{ success: boolean;
     '--start-maximized',
     '--kiosk', // Full screen without browser UI
     '--force-device-scale-factor=1',
+    // Docker /dev/shm is 64MB by default — Chrome crashes heavy pages (Meet)
+    // with "Aw, Snap! (error code 9)" unless it uses /tmp instead.
+    '--disable-dev-shm-usage',
   ];
 
   const allowCamera = isEnvTrue('BOT_ALLOW_CAMERA');
