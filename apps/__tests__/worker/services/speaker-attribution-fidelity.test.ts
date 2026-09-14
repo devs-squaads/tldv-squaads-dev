@@ -1,0 +1,215 @@
+/// <reference types="bun" />
+
+import { describe, expect, it } from "bun:test";
+import {
+  MAX_SPEAKERS,
+  accumulateSpeakerRoster,
+  applyAttributionToChunk,
+  buildAttributionPrompt,
+  chunkLineIndexes,
+  chunkLines,
+  isAttributionLossy,
+  speakerAt,
+} from "../../../worker/src/services/speakerAttribution";
+
+describe("chunkLineIndexes (spec 016)", () => {
+  it("agrupa las mismas líneas que chunkLines, pero devolviendo índices", () => {
+    const lines = ["a".repeat(6), "b".repeat(6), "c".repeat(6)];
+    const indexes = chunkLineIndexes(lines, 10);
+
+    expect(indexes).toEqual([[0], [1], [2]]);
+    expect(indexes.map((idxs) => idxs.map((i) => lines[i]))).toEqual(chunkLines(lines, 10));
+  });
+
+  it("no pierde ni reordena ninguna línea", () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `linea-${i}-${"x".repeat(20)}`);
+    const flat = chunkLineIndexes(lines, 100).flat();
+
+    expect(flat).toEqual(lines.map((_, i) => i));
+  });
+
+  it("respeta el límite de caracteres por chunk", () => {
+    const lines = Array.from({ length: 20 }, () => "y".repeat(30));
+    const chunks = chunkLineIndexes(lines, 100);
+
+    for (const chunk of chunks) {
+      const chars = chunk.reduce((sum, i) => sum + lines[i].length + 1, 0);
+      expect(chars).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("devuelve vacío para una entrada vacía", () => {
+    expect(chunkLineIndexes([], 100)).toEqual([]);
+  });
+});
+
+describe("isAttributionLossy (spec 016)", () => {
+  it("marca como pérdida una respuesta truncada por el proveedor", () => {
+    expect(isAttributionLossy(1000, 1000, true)).toBe(true);
+  });
+
+  it("marca como pérdida un adelgazamiento por debajo del 70 %", () => {
+    expect(isAttributionLossy(1000, 699, false)).toBe(true);
+  });
+
+  it("acepta una fusión de líneas razonable", () => {
+    // La atribución fusiona turnos del mismo hablante: algo menos de texto es legítimo.
+    expect(isAttributionLossy(1000, 800, false)).toBe(false);
+  });
+
+  it("acepta el límite exacto del 70 %", () => {
+    expect(isAttributionLossy(1000, 700, false)).toBe(false);
+  });
+
+  it("trata una entrada sin caracteres como pérdida sólo si tampoco hay salida", () => {
+    expect(isAttributionLossy(0, 0, false)).toBe(true);
+  });
+});
+
+describe("speakerAt (spec 016)", () => {
+  const timeline = [
+    { speaker: "Ana", start: 0, end: 10, text: "hola" },
+    { speaker: "Luis", start: 10, end: 20, text: "buenas" },
+    { speaker: "Ana", start: 20, end: 30, text: "vale" },
+  ];
+
+  it("devuelve el hablante vigente en ese instante", () => {
+    expect(speakerAt(timeline, 5)).toBe("Ana");
+    expect(speakerAt(timeline, 15)).toBe("Luis");
+    expect(speakerAt(timeline, 25)).toBe("Ana");
+  });
+
+  it("mantiene el último hablante conocido dentro de la tolerancia", () => {
+    expect(speakerAt(timeline, 31, 3)).toBe("Ana");
+  });
+
+  it("devuelve undefined antes de la primera línea", () => {
+    expect(speakerAt(timeline, -10, 3)).toBeUndefined();
+  });
+
+  it("NO adelanta el turno cuando el cambio está a menos de la tolerancia", () => {
+    // Regresión que detectó la revisión de frontera: con tolerancia 3 y Ana en 0 s, Luis en 2 s,
+    // el segmento de 0 s se atribuía a Luis.
+    const tight = [
+      { speaker: "Ana", start: 0, end: 2, text: "hola" },
+      { speaker: "Luis", start: 2, end: 6, text: "buenas" },
+    ];
+
+    expect(speakerAt(tight, 0)).toBe("Ana");
+    expect(speakerAt(tight, 1)).toBe("Ana");
+    expect(speakerAt(tight, 2)).toBe("Luis");
+  });
+
+  it("aplica la tolerancia sólo cuando nada ha empezado todavía", () => {
+    const later = [{ speaker: "Ana", start: 10, end: 20, text: "hola" }];
+
+    expect(speakerAt(later, 8, 3)).toBe("Ana");
+    expect(speakerAt(later, 6, 3)).toBeUndefined();
+  });
+
+  it("devuelve undefined con una línea temporal vacía", () => {
+    expect(speakerAt([], 5)).toBeUndefined();
+  });
+});
+
+describe("applyAttributionToChunk (spec 016)", () => {
+  const segments = [
+    { start: 0, end: 4, text: "uno" },
+    { start: 5, end: 9, text: "dos" },
+    { start: 60, end: 64, text: "tres" },
+  ];
+
+  it("NUNCA descarta un segmento, aunque el modelo no lo cubra", () => {
+    // El modelo sólo reemitió la primera mitad: antes esto hacía desaparecer `tres`.
+    const result = applyAttributionToChunk(segments, [
+      { speaker: "Ana", start: 0, end: 9, text: "uno dos" },
+    ]);
+
+    expect(result).toHaveLength(3);
+    expect(result.map((s) => s.text)).toEqual(["uno", "dos", "tres"]);
+  });
+
+  it("asigna hablante a los segmentos cubiertos", () => {
+    const result = applyAttributionToChunk(segments, [
+      { speaker: "Ana", start: 0, end: 9, text: "uno dos" },
+    ]);
+
+    expect(result[0].speaker).toBe("Ana");
+    expect(result[1].speaker).toBe("Ana");
+  });
+
+  it("cambia de hablante en el punto que marca la línea temporal", () => {
+    const result = applyAttributionToChunk(segments, [
+      { speaker: "Ana", start: 0, end: 9, text: "uno dos" },
+      { speaker: "Luis", start: 60, end: 64, text: "tres" },
+    ]);
+
+    expect(result.map((s) => s.speaker)).toEqual(["Ana", "Ana", "Luis"]);
+  });
+
+  it("conserva los segmentos sin hablante cuando no hay línea temporal", () => {
+    const result = applyAttributionToChunk(segments, []);
+
+    expect(result).toHaveLength(3);
+    expect(result.every((s) => s.speaker === undefined)).toBe(true);
+  });
+
+  it("no muta los segmentos de entrada", () => {
+    const input = [{ start: 0, end: 4, text: "uno" }];
+    const result = applyAttributionToChunk(input, [{ speaker: "Ana", start: 0, end: 4, text: "uno" }]);
+
+    expect(input[0]).not.toHaveProperty("speaker");
+    expect(result[0].speaker).toBe("Ana");
+  });
+
+  it("tolera una línea temporal desordenada", () => {
+    const result = applyAttributionToChunk(segments, [
+      { speaker: "Luis", start: 60, end: 64, text: "tres" },
+      { speaker: "Ana", start: 0, end: 9, text: "uno dos" },
+    ]);
+
+    expect(result.map((s) => s.speaker)).toEqual(["Ana", "Ana", "Luis"]);
+  });
+});
+
+describe("censo de hablantes entre fragmentos (spec 016)", () => {
+  const line = (speaker: string) => ({ speaker, start: 0, end: 1, text: "x" });
+
+  it("acumula etiquetas nuevas en orden de aparición", () => {
+    const roster = accumulateSpeakerRoster([], [line("Ana"), line("Luis"), line("Ana")]);
+
+    expect(roster).toEqual(["Ana", "Luis"]);
+  });
+
+  it("no duplica una etiqueta ya conocida", () => {
+    const roster = accumulateSpeakerRoster(["Ana"], [line("Ana"), line("Luis")]);
+
+    expect(roster).toEqual(["Ana", "Luis"]);
+  });
+
+  it("respeta el máximo de hablantes del prompt", () => {
+    const many = Array.from({ length: 10 }, (_, i) => line(`P${i}`));
+    const roster = accumulateSpeakerRoster(["A", "B", "C", "D", "E"], many);
+
+    expect(roster).toHaveLength(MAX_SPEAKERS);
+  });
+
+  it("conserva el censo previo si el chunk no aporta etiquetas nuevas", () => {
+    const roster = accumulateSpeakerRoster(["Ana", "Luis"], []);
+
+    expect(roster).toEqual(["Ana", "Luis"]);
+  });
+
+  it("el prompt incluye el censo cuando se le pasa", () => {
+    const prompt = buildAttributionPrompt("[00:00] hola", 1, 3, ["Ana", "Luis"]);
+
+    expect(prompt).toContain("HABLANTES YA IDENTIFICADOS");
+    expect(prompt).toContain("Ana, Luis");
+  });
+
+  it("el prompt no menciona censo cuando no hay hablantes conocidos", () => {
+    const prompt = buildAttributionPrompt("[00:00] hola", 0, 3);
+
+    expect(prompt).not.toContain("HABLANTES YA IDENTIFICADOS");
+  });
+});

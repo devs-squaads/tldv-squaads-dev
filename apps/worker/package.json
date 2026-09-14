@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "bun --watch run src/runner.ts",
     "start": "bun run src/runner.ts",
-    "dictionary:refine": "bun run src/scripts/refineDictionary.ts"
+    "dictionary:refine": "bun run src/scripts/refineDictionary.ts",
+    "doctor:ai": "bun run src/scripts/doctorAi.ts"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.0.0",
