@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import fs from "fs";
 import path from "path";
 
@@ -6,8 +8,22 @@ export const dynamic = "force-dynamic";
 
 const CREDENTIALS_PATH = path.join(process.cwd(), "resources", "google_service_account_file.json");
 
+/**
+ * La credencial del Service Account la usa el worker para leer Google Calendar (auto-join).
+ * `POST` escribe en disco y `DELETE` borra, así que los tres verbos exigen Session Auth
+ * (spec 015): antes eran anónimos y cualquiera en internet podía sustituir o borrar la credencial.
+ */
+async function isAuthenticated(): Promise<boolean> {
+  const session = await getServerSession(authOptions);
+  return Boolean((session?.user as { id?: string } | undefined)?.id);
+}
+
 export async function GET() {
   try {
+    if (!(await isAuthenticated())) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     if (!fs.existsSync(CREDENTIALS_PATH)) {
       return NextResponse.json({ exists: false, content: null });
     }
@@ -35,6 +51,10 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await isAuthenticated())) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { json } = (await req.json()) as { json: string };
 
     if (!json || typeof json !== "string") {
@@ -81,6 +101,10 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE() {
   try {
+    if (!(await isAuthenticated())) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     if (fs.existsSync(CREDENTIALS_PATH)) {
       fs.unlinkSync(CREDENTIALS_PATH);
     }
