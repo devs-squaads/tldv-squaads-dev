@@ -81,21 +81,16 @@ export function resolveAiModels(
 }
 
 /**
- * Presupuesto de salida para una llamada de texto, acotado por el techo del proveedor.
+ * REGLA DEL PROYECTO: nunca se fija `max_tokens` en una llamada a un LLM.
  *
- * El refiner y la atribución reemiten el texto completo, así que necesitan un presupuesto del orden de
- * la entrada: los 8192 tokens anteriores truncaban cualquier reunión larga.
+ * No hay función de presupuesto de salida a propósito. Un tope artificial trunca la respuesta, y en
+ * este pipeline truncar significa perder contenido de la reunión. Medido: con `max_tokens: 8000` la
+ * atribución de hablantes se cortó al 55 % de la entrada; sin el tope, completa.
  *
- * El margen NO es cosmético: los modelos de razonamiento (`openai/gpt-oss-*`) gastan tokens **antes**
- * de emitir la respuesta (medido: 55 tokens para pedir una palabra), y esos tokens cuentan contra el
- * mismo presupuesto. Con un margen fijo de 2048 la atribución de una reunión de 53 min se truncó y se
- * perdieron los últimos 4 minutos en silencio.
+ * Los modelos de razonamiento agravan el problema porque gastan tokens **antes** de emitir texto y
+ * cuentan contra el mismo tope. Si algún proveedor impone su propio límite, la guarda de fidelidad
+ * (`finish_reason === "length"` + ratio de caracteres) lo detecta y conserva el contenido original.
  */
-export function resolveTextOutputBudget(transcriptChars: number): number {
-  const approxOutputTokens = Math.ceil(transcriptChars / 3);
-  const requested = Math.ceil(approxOutputTokens * 1.4) + 4096;
-  return Math.min(Math.max(requested, 4096), 32768);
-}
 
 const alreadyWarned = new Set<string>();
 

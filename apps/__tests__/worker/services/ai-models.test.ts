@@ -6,7 +6,6 @@ import {
   DEFAULT_TEXT_MODEL,
   DEFAULT_TRANSCRIPTION_MODEL,
   resolveAiModels,
-  resolveTextOutputBudget,
 } from "../../../worker/src/services/aiModels";
 
 describe("resolveAiModels (spec 016)", () => {
@@ -67,24 +66,10 @@ describe("resolveAiModels (spec 016)", () => {
   });
 });
 
-describe("resolveTextOutputBudget (spec 016)", () => {
-  it("gives a long transcript enough room to be re-emitted", () => {
-    // El caso real: 53,5 min -> ~58 000 caracteres. Con 8192 tokens se truncaba.
-    const budget = resolveTextOutputBudget(58_000);
-
-    expect(budget).toBeGreaterThan(8192);
-    expect(budget).toBeGreaterThanOrEqual(20_000);
-  });
-
-  it("stays within the provider ceiling", () => {
-    expect(resolveTextOutputBudget(5_000_000)).toBeLessThanOrEqual(32_768);
-  });
-
-  it("never goes below a sane floor for a tiny input", () => {
-    expect(resolveTextOutputBudget(10)).toBeGreaterThanOrEqual(4096);
-  });
-
-  it("grows with the input", () => {
-    expect(resolveTextOutputBudget(60_000)).toBeGreaterThan(resolveTextOutputBudget(6_000));
+describe("regla: nunca se fija max_tokens (spec 017)", () => {
+  it("no expone ninguna función de presupuesto de salida", async () => {
+    // Un tope artificial trunca la respuesta y en este pipeline truncar es perder contenido.
+    const mod = await import("../../../worker/src/services/aiModels");
+    expect("resolveTextOutputBudget" in mod).toBe(false);
   });
 });

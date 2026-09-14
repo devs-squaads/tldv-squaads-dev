@@ -71,7 +71,6 @@ export class GroqChatProvider implements ChatProvider {
           tools: loopTools.map(toGroqTool),
           tool_choice: requireToolCall ? "required" : "auto",
           temperature: 0.4,
-          max_tokens: 2048,
           stream: false,
         });
 
@@ -103,7 +102,6 @@ export class GroqChatProvider implements ChatProvider {
           messages: history.map(toGroqMessage),
           tool_choice: "none",
           temperature: 0.4,
-          max_tokens: 2048,
           stream: true,
         });
 
@@ -118,7 +116,6 @@ export class GroqChatProvider implements ChatProvider {
           model: MODEL_STREAM,
           messages: history.map(toGroqMessage),
           temperature: 0.4,
-          max_tokens: 2048,
           stream: true,
         });
 

@@ -7,7 +7,7 @@
 import Groq from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { TranscriptionSegment } from "@/integrations/ai/transcription/TranscriptionProvider";
-import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
+import { getAiModels } from "@/services/aiModels";
 
 /**
  * Tamaño máximo de cada fragmento que se manda al LLM.
@@ -326,9 +326,8 @@ async function attributeWithGroq(chunks: string[][]): Promise<ChunkAttribution[]
       model: getAiModels().textModel,
       messages: [{ role: "user", content: prompt }],
       temperature: 0, // determinista: la tarea es copiar, no redactar
-      // La atribución reemite el diálogo con la etiqueta de hablante, así que la salida es del
-      // orden de la entrada: un presupuesto fijo truncaba los fragmentos grandes.
-      max_tokens: resolveTextOutputBudget(chunkText.length),
+      // NUNCA se fija `max_tokens`: la atribución reemite el diálogo entero y un tope artificial lo
+      // trunca. Medido: con `max_tokens: 8000` la respuesta se cortó al 55 %.
     });
     const text = result.choices[0]?.message?.content?.trim() || "";
     if (!text) throw new Error("Groq devolvió una respuesta vacía en atribución");

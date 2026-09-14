@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
-import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
+import { getAiModels } from "@/services/aiModels";
 import type { SummaryResult } from "@meeting-bot/shared/integrations/ai/summary/types";
 
 export interface KeyMoment {
@@ -174,7 +174,6 @@ async function generateWithGroq(
       { role: "user", content: prompt },
     ],
     temperature: 0.3,
-    max_tokens: 4096,
   });
 
   const text = result.choices[0]?.message?.content?.trim() || "";
@@ -297,9 +296,9 @@ async function refineWithGroq(
     model: getAiModels().textModel,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
-    // El refiner reemite el transcript completo: con 8192 tokens se truncaba cualquier reunión
-    // larga y la guarda de fidelidad descartaba el resultado, dejando el diccionario sin aplicar.
-    max_tokens: resolveTextOutputBudget(rawTranscript.length),
+    // NUNCA se fija `max_tokens`: un tope artificial trunca la reemisión del transcript y la guarda
+    // de fidelidad descarta el resultado, dejando el diccionario sin aplicar. Medido: con
+    // `max_tokens: 8000` la respuesta se cortó al 55 %; sin tope, completa.
   });
 
   const text = result.choices[0]?.message?.content?.trim() || "";

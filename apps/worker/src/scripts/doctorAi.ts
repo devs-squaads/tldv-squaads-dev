@@ -92,7 +92,6 @@ async function checkTextModel(): Promise<StageResult> {
     const result = await groq.chat.completions.create({
       model,
       messages: [{ role: "user", content: "Responde solo con la palabra OK" }],
-      max_tokens: 2048,
     });
     const text = result.choices[0]?.message?.content?.trim() || "";
 
