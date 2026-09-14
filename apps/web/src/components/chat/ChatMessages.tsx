@@ -213,17 +213,17 @@ const STARTER_TOPICS = [
     answer: `Las transcripciones pueden fallar por varias razones.
 
 **Causas más comunes:**
-- **GROQ_API_KEY no configurada o con créditos agotados** → verificar en Settings
+- **GEMINI_API_KEY no configurada o sin crédito** → verificar en Settings
 - **Archivo de audio corrupto o vacío** → ocurre si la grabación se interrumpió antes de terminar
-- **Reunión muy larga** → el límite de Groq Whisper es 25MB de audio
-- **Problemas de conectividad** con la API de Groq
+- **Reunión muy larga** → el audio se trocea automáticamente antes de enviarlo
+- **Problemas de conectividad** con la API de Gemini
 
 **Cómo diagnosticarlo:**
 1. Ir al detalle de la reunión → revisar el estado y el mensaje de error
-2. Settings → confirmar que GROQ_API_KEY esté configurada y tenga créditos
+2. Settings → confirmar que GEMINI_API_KEY esté configurada y tenga créditos
 3. Si el archivo está corrupto, la reunión no tiene solución — hay que repetirla
 
-**Alternativa:** Podés configurar Deepgram como provider de transcripción en Settings si Groq sigue fallando.`,
+**Alternativa:** Podés configurar Deepgram como provider de transcripción en Settings. Para el texto, DeepSeek es el proveedor por defecto.`,
   },
   {
     icon: Cpu,
@@ -240,7 +240,7 @@ const STARTER_TOPICS = [
 2. **joining** → Puppeteer abre el navegador y navega a la URL
 3. **waiting_admission** → el bot espera ser admitido a la sala
 4. **recording** → FFmpeg captura audio y video en tiempo real
-5. **transcribing** → el audio se envía a Groq Whisper (o Deepgram)
+5. **transcribing** → el audio se envía a Gemini (o Deepgram)
 6. **summarizing** → la transcripción se envía a Gemini para generar el resumen
 7. **completed** → transcripción, resumen, action items y key moments disponibles
 

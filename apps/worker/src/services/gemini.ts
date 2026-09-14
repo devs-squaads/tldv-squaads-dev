@@ -1,7 +1,5 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import Groq from "groq-sdk";
-import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
 import type { SummaryResult } from "@meeting-bot/shared/integrations/ai/summary/types";
+import { TextGenerationProviderFactory } from "@/integrations/ai/text/TextGenerationProviderFactory";
 
 export interface KeyMoment {
   timeSeconds: number;
@@ -140,46 +138,26 @@ function parseResponse(text: string, maxDurationSeconds?: number): SummaryResult
   };
 }
 
-async function generateWithGemini(
-  transcript: string,
-  context?: string,
-  maxDurationSeconds?: number,
-): Promise<SummaryResult> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: getAiModels().geminiModel });
-
+/**
+ * Genera el resumen a través del contrato de texto. No hay ramas por proveedor aquí: la selección y el
+ * respaldo viven en `TextGenerationProviderFactory`.
+ */
+async function generateSummaryText(transcript: string, context?: string): Promise<SummaryResult> {
   const prompt = SUMMARY_PROMPT_PREFIX + buildContextBlock(context) + transcript;
-  const result = await model.generateContent(prompt);
-  const text = result.response.text().trim();
-  console.log("[generateSummary] Gemini response received");
-  return parseResponse(text, maxDurationSeconds);
-}
 
-async function generateWithGroq(
-  transcript: string,
-  context?: string,
-  maxDurationSeconds?: number,
-): Promise<SummaryResult> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("GROQ_API_KEY not configured");
-
-  const groq = new Groq({ apiKey });
-  const prompt = SUMMARY_PROMPT_PREFIX + buildContextBlock(context) + transcript;
-  const result = await groq.chat.completions.create({
-    model: getAiModels().textModel,
-    messages: [
-      { role: "user", content: prompt },
-    ],
+  // `reasoning: auto` porque resumir y elegir capítulos sí requiere juicio.
+  const result = await TextGenerationProviderFactory.generate({
+    user: prompt,
     temperature: 0.3,
-    max_tokens: 4096,
+    reasoning: "auto",
   });
 
-  const text = result.choices[0]?.message?.content?.trim() || "";
-  console.log("[generateSummary] Groq response received");
-  return parseResponse(text, maxDurationSeconds);
+  if (!result.text) {
+    throw new Error(`${result.provider} devolvió un resumen vacío`);
+  }
+
+  console.log(`[generateSummary] ${result.provider}/${result.model} respondió`);
+  return parseResponse(result.text);
 }
 
 /**
@@ -203,40 +181,15 @@ export function formatTimestampedTranscript(
 }
 
 /**
- * Generates a meeting summary. Tries Groq first, falls back to Gemini.
- * If durationSeconds is provided, it's stored in the result for the chapter player.
+ * Genera el resumen de la reunión. Si se pasa `durationSeconds`, se guarda para el reproductor de
+ * capítulos.
  */
 export async function generateSummary(
   transcript: string,
   durationSeconds?: number,
   context?: string,
 ): Promise<SummaryResult> {
-  let result: SummaryResult | null = null;
-
-  // Try Groq/Llama first (generous free tier, saves Gemini quota for the refiner)
-  if (process.env.GROQ_API_KEY) {
-    try {
-      result = await generateWithGroq(transcript, context, durationSeconds);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[generateSummary] Groq/Llama failed (${msg}), falling back to Gemini...`);
-    }
-  }
-
-  // Fallback to Gemini
-  if (!result && process.env.GEMINI_API_KEY) {
-    try {
-      result = await generateWithGemini(transcript, context, durationSeconds);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[generateSummary] Gemini also failed:", msg);
-      throw new Error(`Failed to generate summary: ${msg}`);
-    }
-  }
-
-  if (!result) {
-    throw new Error("No AI provider configured for summary (need GROQ_API_KEY or GEMINI_API_KEY)");
-  }
+  const result = await generateSummaryText(transcript, context);
 
   if (durationSeconds) {
     result.durationSeconds = durationSeconds;
@@ -281,83 +234,37 @@ ${rawTranscript}
 """`;
 }
 
-async function refineWithGroq(
-  rawTranscript: string,
-  context: string,
-  dictionaryTerms?: string[],
-  dictionaryPairs?: Array<{ wrong: string; correct: string }>,
-): Promise<string> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("GROQ_API_KEY no está configurada");
-
-  const groq = new Groq({ apiKey });
-  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms, dictionaryPairs);
-
-  const result = await groq.chat.completions.create({
-    model: getAiModels().textModel,
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.2,
-    // El refiner reemite el transcript completo: con 8192 tokens se truncaba cualquier reunión
-    // larga y la guarda de fidelidad descartaba el resultado, dejando el diccionario sin aplicar.
-    max_tokens: resolveTextOutputBudget(rawTranscript.length),
-  });
-
-  const text = result.choices[0]?.message?.content?.trim() || "";
-  if (!text) throw new Error("Groq devolvió una respuesta vacía");
-
-  console.log(`[refineTranscript] Groq: ${rawTranscript.length} -> ${text.length} chars`);
-  return text;
-}
-
-async function refineWithGemini(
-  rawTranscript: string,
-  context: string,
-  dictionaryTerms?: string[],
-  dictionaryPairs?: Array<{ wrong: string; correct: string }>,
-): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY no está configurada");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: getAiModels().geminiModel,
-    generationConfig: { temperature: 0.2 },
-  });
-
-  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms, dictionaryPairs);
-  const result = await model.generateContent(prompt);
-  const text = result.response.text().trim();
-
-  if (!text) throw new Error("Gemini devolvió una respuesta vacía");
-
-  console.log(`[refineTranscript] Gemini: ${rawTranscript.length} -> ${text.length} chars`);
-  return text;
-}
-
 /**
- * Refines a raw transcript by applying user instructions.
- * Intenta primero el modelo de texto de Groq y cae a Gemini si falla.
+ * Refina un transcript crudo aplicando el contexto y el diccionario del usuario.
+ *
+ * `reasoning: off` porque es una tarea mecánica de reemisión, no de juicio: medido, 7,7 s frente a
+ * 23,1 s con razonamiento y el mismo resultado.
+ *
+ * NUNCA se fija `max_tokens`: un tope artificial trunca la reemisión del transcript y la guarda de
+ * fidelidad descarta el resultado, dejando el diccionario sin aplicar.
  */
-export async function refineTranscriptWithGemini(
+export async function refineTranscript(
   rawTranscript: string,
   context: string,
   dictionaryTerms?: string[],
   dictionaryPairs?: Array<{ wrong: string; correct: string }>,
 ): Promise<string> {
-  // Try Groq first (generous free tier)
-  if (process.env.GROQ_API_KEY) {
-    try {
-      return await refineWithGroq(rawTranscript, context, dictionaryTerms, dictionaryPairs);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[refineTranscript] Groq failed (${msg}), falling back to Gemini...`);
-    }
+  const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms, dictionaryPairs);
+
+  const result = await TextGenerationProviderFactory.generate({
+    user: prompt,
+    temperature: 0.2,
+    reasoning: "off",
+  });
+
+  const text = result.text.trim();
+  if (!text) {
+    throw new Error(`${result.provider} devolvió una respuesta vacía en el refinado`);
   }
 
-  // Fallback to Gemini
-  if (process.env.GEMINI_API_KEY) {
-    return await refineWithGemini(rawTranscript, context, dictionaryTerms, dictionaryPairs);
+  console.log(`[refineTranscript] ${result.provider}: ${rawTranscript.length} -> ${text.length} chars`);
+  if (result.truncated) {
+    console.warn("[refineTranscript] El proveedor cortó la respuesta; la guarda de fidelidad decidirá.");
   }
-
-  throw new Error("No hay API key configurada (GROQ_API_KEY o GEMINI_API_KEY)");
+  return text;
 }

@@ -101,7 +101,7 @@ export interface MeetingDetailForLLM extends MeetingSummaryForLLM {
 /** Lo que el LLM recibe como resultado de get_system_status */
 export interface SystemStatusForLLM {
   providers: {
-    groqConfigured: boolean;
+    deepseekConfigured: boolean;
     geminiConfigured: boolean;
     deepgramConfigured: boolean;
     transcriptionProvider: string;

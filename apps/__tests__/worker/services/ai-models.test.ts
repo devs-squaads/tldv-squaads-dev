@@ -2,89 +2,89 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+  DEFAULT_DEEPSEEK_MODEL,
   DEFAULT_GEMINI_MODEL,
-  DEFAULT_TEXT_MODEL,
-  DEFAULT_TRANSCRIPTION_MODEL,
+  RETIRED_MODELS,
   resolveAiModels,
-  resolveTextOutputBudget,
 } from "../../../worker/src/services/aiModels";
 
-describe("resolveAiModels (spec 016)", () => {
+describe("resolveAiModels (spec 016/017)", () => {
   it("uses the verified defaults when nothing is configured", () => {
     const { models, warnings } = resolveAiModels({});
 
-    expect(models.transcriptionModel).toBe(DEFAULT_TRANSCRIPTION_MODEL);
-    expect(models.textModel).toBe(DEFAULT_TEXT_MODEL);
     expect(models.geminiModel).toBe(DEFAULT_GEMINI_MODEL);
+    expect(models.deepseekModel).toBe(DEFAULT_DEEPSEEK_MODEL);
     expect(warnings).toEqual([]);
   });
 
-  it("never defaults to the model that broke the pipeline", () => {
+  it("separates the audio model (Gemini) from the text model (DeepSeek)", () => {
     const { models } = resolveAiModels({});
 
-    expect(models.textModel).not.toBe("llama-3.3-70b-versatile");
+    expect(models.geminiModel).toBe("gemini-3.8-flash");
+    expect(models.deepseekModel).toBe("deepseek-flash");
   });
 
-  it("honours an explicitly configured model", () => {
-    const { models, warnings } = resolveAiModels({ GROQ_TEXT_MODEL: "deepseek-v4.1-flash" });
+  it("never defaults to a Groq model", () => {
+    const { models } = resolveAiModels({});
+    const values = [models.geminiModel, models.deepseekModel];
 
-    expect(models.textModel).toBe("deepseek-v4.1-flash");
+    expect(
+      values.some((v) => v.includes("llama") || v.includes("gpt-oss") || v.includes("whisper")),
+    ).toBe(false);
+  });
+
+  it("honours explicitly configured models", () => {
+    const { models, warnings } = resolveAiModels({
+      GEMINI_MODEL: "gemini-3.5-transcribe",
+      DEEPSEEK_MODEL: "deepseek-v4-pro",
+    });
+
+    expect(models.geminiModel).toBe("gemini-3.5-transcribe");
+    expect(models.deepseekModel).toBe("deepseek-v4-pro");
     expect(warnings).toEqual([]);
   });
 
-  it("honours the transcription and gemini overrides independently", () => {
-    const { models } = resolveAiModels({
-      GROQ_TRANSCRIPTION_MODEL: "whisper-large-v3-turbo",
-      GEMINI_MODEL: "gemini-3.5-transcribe",
-    });
+  it("discards a retired DeepSeek model instead of failing at runtime, and says why", () => {
+    const { models, warnings } = resolveAiModels({ DEEPSEEK_MODEL: "deepseek-v4-flash" });
 
-    expect(models.transcriptionModel).toBe("whisper-large-v3-turbo");
-    expect(models.geminiModel).toBe("gemini-3.5-transcribe");
-    expect(models.textModel).toBe(DEFAULT_TEXT_MODEL);
+    expect(models.deepseekModel).toBe(DEFAULT_DEEPSEEK_MODEL);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("deepseek-v4-flash");
+    expect(warnings[0]).toContain("DEEPSEEK_MODEL");
   });
 
-  it("discards a retired model instead of failing at runtime, and says why", () => {
-    const { models, warnings } = resolveAiModels({ GROQ_TEXT_MODEL: "llama-3.3-70b-versatile" });
+  it("discards the Groq models that were in use before", () => {
+    const { models, warnings } = resolveAiModels({ DEEPSEEK_MODEL: "openai/gpt-oss-120b" });
 
-    expect(models.textModel).toBe(DEFAULT_TEXT_MODEL);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("llama-3.3-70b-versatile");
-    expect(warnings[0]).toContain("GROQ_TEXT_MODEL");
+    expect(models.deepseekModel).toBe(DEFAULT_DEEPSEEK_MODEL);
+    expect(warnings[0]).toContain("openai/gpt-oss-120b");
+  });
+
+  it("declares the retired Groq models so an old .env cannot resurrect them", () => {
+    expect(RETIRED_MODELS).toContain("llama-3.3-70b-versatile");
+    expect(RETIRED_MODELS).toContain("openai/gpt-oss-120b");
+    expect(RETIRED_MODELS).toContain("whisper-large-v3");
   });
 
   it("treats a blank value as unset", () => {
-    const { models, warnings } = resolveAiModels({ GROQ_TEXT_MODEL: "   ", GEMINI_MODEL: "" });
+    const { models, warnings } = resolveAiModels({ GEMINI_MODEL: "   ", DEEPSEEK_MODEL: "" });
 
-    expect(models.textModel).toBe(DEFAULT_TEXT_MODEL);
     expect(models.geminiModel).toBe(DEFAULT_GEMINI_MODEL);
+    expect(models.deepseekModel).toBe(DEFAULT_DEEPSEEK_MODEL);
     expect(warnings).toEqual([]);
   });
 
   it("trims a configured value with stray whitespace", () => {
-    const { models } = resolveAiModels({ GROQ_TEXT_MODEL: "  openai/gpt-oss-20b  " });
+    const { models } = resolveAiModels({ GEMINI_MODEL: "  gemini-3.7-flash  " });
 
-    expect(models.textModel).toBe("openai/gpt-oss-20b");
+    expect(models.geminiModel).toBe("gemini-3.7-flash");
   });
 });
 
-describe("resolveTextOutputBudget (spec 016)", () => {
-  it("gives a long transcript enough room to be re-emitted", () => {
-    // El caso real: 53,5 min -> ~58 000 caracteres. Con 8192 tokens se truncaba.
-    const budget = resolveTextOutputBudget(58_000);
-
-    expect(budget).toBeGreaterThan(8192);
-    expect(budget).toBeGreaterThanOrEqual(20_000);
-  });
-
-  it("stays within the provider ceiling", () => {
-    expect(resolveTextOutputBudget(5_000_000)).toBeLessThanOrEqual(32_768);
-  });
-
-  it("never goes below a sane floor for a tiny input", () => {
-    expect(resolveTextOutputBudget(10)).toBeGreaterThanOrEqual(4096);
-  });
-
-  it("grows with the input", () => {
-    expect(resolveTextOutputBudget(60_000)).toBeGreaterThan(resolveTextOutputBudget(6_000));
+describe("regla: nunca se fija max_tokens (spec 017)", () => {
+  it("no expone ninguna función de presupuesto de salida", async () => {
+    // Un tope artificial trunca la respuesta y en este pipeline truncar es perder contenido.
+    const mod = await import("../../../worker/src/services/aiModels");
+    expect("resolveTextOutputBudget" in mod).toBe(false);
   });
 });

@@ -1,21 +1,22 @@
 /**
- * Resolución de los identificadores de modelo del pipeline de IA (spec 016).
+ * Resolución de los identificadores de modelo del pipeline de IA (spec 016/017).
  *
  * Módulo puro: recibe el entorno, devuelve la configuración. Existe porque los modelos estaban
  * hardcodeados en cuatro servicios y uno de ellos (`llama-3.3-70b-versatile`) desapareció de la
  * cuenta de Groq, dejando caer en silencio la diarización, el refiner y el resumen.
  *
- * Los valores por defecto NO son de memoria: se verificaron con llamadas reales contra las APIs el
- * 2026-09-14 (ver `spec/features/016-ai-pipeline-recovery/plan.md`).
+ * Reparto desde la 017: **Gemini para audio** (transcribe y diariza de forma acústica) y **DeepSeek
+ * para texto** (refiner y resumen). Groq queda fuera del proyecto.
+ *
+ * Los valores por defecto NO son de memoria: se verificaron con llamadas reales contra las APIs
+ * (ver `spec/features/017-text-provider-deepseek/plan.md`).
  */
 
 export interface AiModelConfig {
-  /** Modelo de ASR (audio → texto). */
-  transcriptionModel: string;
-  /** Modelo de chat de Groq: refiner, atribución de hablantes y resumen. */
-  textModel: string;
-  /** Modelo de Gemini, usado como red de seguridad de los anteriores. */
+  /** Gemini: transcripción con audio (y respaldo de texto). */
   geminiModel: string;
+  /** DeepSeek: refiner y resumen. */
+  deepseekModel: string;
 }
 
 export interface ResolvedAiModels {
@@ -24,19 +25,30 @@ export interface ResolvedAiModels {
   warnings: string[];
 }
 
-/** Verificado: existe en la cuenta y transcribió 53,5 min en 14,6 s. */
-export const DEFAULT_TRANSCRIPTION_MODEL = "whisper-large-v3";
-/** Verificado: existe en la cuenta y respondió con JSON válido. */
-export const DEFAULT_TEXT_MODEL = "openai/gpt-oss-120b";
-/** Verificado: existe en la clave (1M entrada / 65k salida). */
+/** Verificado: transcribió 53,5 min de audio en 63,5 s, con diarización acústica. */
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+/** Verificado: responde al API compatible con OpenAI y reemite texto fielmente. */
+export const DEFAULT_DEEPSEEK_MODEL = "deepseek-flash";
 
 /**
- * Modelos que estuvieron en uso y ya no están disponibles. Si alguien los configura (porque los
- * copió de un `.env` viejo o del README anterior), se descartan con aviso en vez de romper el
- * pipeline en tiempo de ejecución.
+ * Modelos que estuvieron en uso y ya no valen. Si alguien los configura (porque los copió de un
+ * `.env` viejo o del README anterior), se descartan con aviso en vez de romper el pipeline en
+ * tiempo de ejecución.
+ *
+ * `deepseek-v4-flash` y `deepseek-v4-flash-vision-exp` están retirados según la documentación de
+ * DeepSeek: el nombre vigente es `deepseek-flash`. Los de Groq se descartan porque el proyecto ya no
+ * usa Groq.
  */
-export const RETIRED_MODELS: ReadonlyArray<string> = ["llama-3.3-70b-versatile"];
+export const RETIRED_MODELS: ReadonlyArray<string> = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "whisper-large-v3",
+  "whisper-large-v3-turbo",
+  "deepseek-v4-flash",
+  "deepseek-v4-flash-vision-exp",
+];
 
 function resolveModel(
   rawValue: string | undefined,
@@ -52,7 +64,7 @@ function resolveModel(
 
   if (RETIRED_MODELS.includes(candidate)) {
     warnings.push(
-      `${envName}="${candidate}" ya no está disponible en el proveedor; se usa "${fallback}".`,
+      `${envName}="${candidate}" ya no está disponible; se usa "${fallback}".`,
     );
     return fallback;
   }
@@ -67,35 +79,29 @@ export function resolveAiModels(
 
   return {
     models: {
-      transcriptionModel: resolveModel(
-        env.GROQ_TRANSCRIPTION_MODEL,
-        DEFAULT_TRANSCRIPTION_MODEL,
-        "GROQ_TRANSCRIPTION_MODEL",
+      geminiModel: resolveModel(env.GEMINI_MODEL, DEFAULT_GEMINI_MODEL, "GEMINI_MODEL", warnings),
+      deepseekModel: resolveModel(
+        env.DEEPSEEK_MODEL,
+        DEFAULT_DEEPSEEK_MODEL,
+        "DEEPSEEK_MODEL",
         warnings,
       ),
-      textModel: resolveModel(env.GROQ_TEXT_MODEL, DEFAULT_TEXT_MODEL, "GROQ_TEXT_MODEL", warnings),
-      geminiModel: resolveModel(env.GEMINI_MODEL, DEFAULT_GEMINI_MODEL, "GEMINI_MODEL", warnings),
     },
     warnings,
   };
 }
 
 /**
- * Presupuesto de salida para una llamada de texto, acotado por el techo del proveedor.
+ * REGLA DEL PROYECTO: nunca se fija `max_tokens` en una llamada a un LLM.
  *
- * El refiner y la atribución reemiten el texto completo, así que necesitan un presupuesto del orden de
- * la entrada: los 8192 tokens anteriores truncaban cualquier reunión larga.
+ * No hay función de presupuesto de salida a propósito. Un tope artificial trunca la respuesta, y en
+ * este pipeline truncar significa perder contenido de la reunión. Medido: con `max_tokens: 8000` la
+ * atribución de hablantes se cortó al 55 % de la entrada; sin el tope, completa.
  *
- * El margen NO es cosmético: los modelos de razonamiento (`openai/gpt-oss-*`) gastan tokens **antes**
- * de emitir la respuesta (medido: 55 tokens para pedir una palabra), y esos tokens cuentan contra el
- * mismo presupuesto. Con un margen fijo de 2048 la atribución de una reunión de 53 min se truncó y se
- * perdieron los últimos 4 minutos en silencio.
+ * Los modelos de razonamiento agravan el problema porque gastan tokens **antes** de emitir texto y
+ * cuentan contra el mismo tope. Si algún proveedor impone su propio límite, la guarda de fidelidad
+ * (`finish_reason === "length"` + ratio de caracteres) lo detecta y conserva el contenido original.
  */
-export function resolveTextOutputBudget(transcriptChars: number): number {
-  const approxOutputTokens = Math.ceil(transcriptChars / 3);
-  const requested = Math.ceil(approxOutputTokens * 1.4) + 4096;
-  return Math.min(Math.max(requested, 4096), 32768);
-}
 
 const alreadyWarned = new Set<string>();
 

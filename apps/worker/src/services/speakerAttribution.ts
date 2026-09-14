@@ -4,10 +4,8 @@
  * clean_transcriptions: [MM:SS] + etiqueta de hablante por línea, por chunks,
  * con fallback silencioso (nunca rompe el pipeline).
  */
-import Groq from "groq-sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { TranscriptionSegment } from "@/integrations/ai/transcription/TranscriptionProvider";
-import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
+import { TextGenerationProviderFactory } from "@/integrations/ai/text/TextGenerationProviderFactory";
 
 /**
  * Tamaño máximo de cada fragmento que se manda al LLM.
@@ -311,55 +309,32 @@ export function accumulateSpeakerRoster(
   return next;
 }
 
-async function attributeWithGroq(chunks: string[][]): Promise<ChunkAttribution[]> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("GROQ_API_KEY no está configurada");
-
-  const groq = new Groq({ apiKey });
+/**
+ * Atribuye hablantes fragmento a fragmento a través del contrato de texto, arrastrando el censo de
+ * hablantes para que cada fragmento no reinicie la numeración.
+ *
+ * `reasoning: off` porque es una tarea mecánica de copiar y etiquetar, no de juicio.
+ */
+async function attributeChunks(chunks: string[][]): Promise<ChunkAttribution[]> {
   const outputs: ChunkAttribution[] = [];
   let roster: string[] = [];
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunkText = chunks[i].join("\n");
     const prompt = buildAttributionPrompt(chunkText, i, chunks.length, roster);
-    const result = await groq.chat.completions.create({
-      model: getAiModels().textModel,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0, // determinista: la tarea es copiar, no redactar
-      // La atribución reemite el diálogo con la etiqueta de hablante, así que la salida es del
-      // orden de la entrada: un presupuesto fijo truncaba los fragmentos grandes.
-      max_tokens: resolveTextOutputBudget(chunkText.length),
+
+    const result = await TextGenerationProviderFactory.generate({
+      user: prompt,
+      temperature: 0,
+      reasoning: "off",
     });
-    const text = result.choices[0]?.message?.content?.trim() || "";
-    if (!text) throw new Error("Groq devolvió una respuesta vacía en atribución");
-    outputs.push({ text, truncated: result.choices[0]?.finish_reason === "length" });
-    roster = accumulateSpeakerRoster(roster, parseAttributedLines(text));
-  }
 
-  return outputs;
-}
+    const text = result.text.trim();
+    if (!text) {
+      throw new Error(`${result.provider} devolvió una respuesta vacía en atribución`);
+    }
 
-async function attributeWithGemini(chunks: string[][]): Promise<ChunkAttribution[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY no está configurada");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: getAiModels().geminiModel,
-    generationConfig: { temperature: 0 },
-  });
-  const outputs: ChunkAttribution[] = [];
-  let roster: string[] = [];
-
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunkText = chunks[i].join("\n");
-    const prompt = buildAttributionPrompt(chunkText, i, chunks.length, roster);
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-    if (!text) throw new Error("Gemini devolvió una respuesta vacía en atribución");
-    const finishReason = (result.response.candidates?.[0] as { finishReason?: string } | undefined)
-      ?.finishReason;
-    outputs.push({ text, truncated: finishReason === "MAX_TOKENS" });
+    outputs.push({ text, truncated: result.truncated });
     roster = accumulateSpeakerRoster(roster, parseAttributedLines(text));
   }
 
@@ -386,24 +361,7 @@ export async function attributeSpeakersToSegments(
   const lineIndexes = chunkLineIndexes(lines);
   const prompts = lineIndexes.map((indexes) => indexes.map((i) => lines[i]));
 
-  let outputs: ChunkAttribution[] | null = null;
-
-  if (process.env.GROQ_API_KEY) {
-    try {
-      outputs = await attributeWithGroq(prompts);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[speakerAttribution] Groq falló (${msg}), fallback a Gemini...`);
-    }
-  }
-
-  if (!outputs && process.env.GEMINI_API_KEY) {
-    outputs = await attributeWithGemini(prompts);
-  }
-
-  if (!outputs) {
-    throw new Error("No hay API key configurada para atribución de hablantes (GROQ_API_KEY o GEMINI_API_KEY)");
-  }
+  const outputs = await attributeChunks(prompts);
 
   const result: TranscriptionSegment[] = [];
   let lossyChunks = 0;

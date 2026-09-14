@@ -38,9 +38,9 @@ export async function buildUserContext(
     ).length;
 
     const autoJoinActive = settings["calendar_auto_join_enabled"] === "true";
-    const transcriptionProvider = settings["transcription_provider"] || "groq (default)";
-    const summaryProvider = settings["summary_provider"] || "gemini (default)";
-    const groqConfigured = Boolean(settings["groq_api_key"] || process.env.GROQ_API_KEY);
+    const transcriptionProvider = settings["transcription_provider"] || "gemini (default)";
+    const summaryProvider = settings["summary_provider"] || "deepseek (default)";
+    const deepseekConfigured = Boolean(settings["deepseek_api_key"] || process.env.DEEPSEEK_API_KEY);
     const geminiConfigured = Boolean(settings["gemini_api_key"] || process.env.GEMINI_API_KEY);
 
     return `
@@ -50,7 +50,7 @@ CONTEXTO DEL SISTEMA
 Fecha actual: ${today}${roleLine ? `\n${roleLine}` : ""}
 Reuniones: ${meetings.length} totales · ${pendingCount} en proceso · ${errorCount} con error${errorCount > 0 ? " ← requieren atención" : ""}
 Auto-join: ${autoJoinActive ? "ACTIVADO" : "DESACTIVADO"} · Transcripción: ${transcriptionProvider} · Resumen: ${summaryProvider}
-Groq: ${groqConfigured ? "✓" : "NO ← posible causa de errores"} · Gemini: ${geminiConfigured ? "✓" : "NO ← posible causa de errores"}
+DeepSeek: ${deepseekConfigured ? "✓" : "NO ← posible causa de errores"} · Gemini: ${geminiConfigured ? "✓" : "NO ← posible causa de errores"}
 ═══════════════════════════════════════`.trim();
   } catch {
     return `

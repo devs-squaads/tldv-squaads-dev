@@ -200,12 +200,13 @@ export const getSystemStatusTool: ToolDefinition<Record<never, never>, SystemSta
     const providerResolution = ChatProviderFactory.resolveProviderResolution();
     const toolPolicy = resolveChatToolPolicy();
 
-    const groqConfigured = Boolean(settings["groq_api_key"] || process.env.GROQ_API_KEY);
+    const deepseekConfigured = Boolean(settings["deepseek_api_key"] || process.env.DEEPSEEK_API_KEY);
     const geminiConfigured = Boolean(settings["gemini_api_key"] || process.env.GEMINI_API_KEY);
     const deepgramConfigured = Boolean(settings["deepgram_api_key"] || process.env.DEEPGRAM_API_KEY);
     const autoJoinEnabled = settings["calendar_auto_join_enabled"] === "true";
-    const transcriptionProvider = settings["transcription_provider"] || "groq";
-    const summaryProvider = settings["summary_provider"] || "gemini";
+    // Gemini hace el ASR (audio) y DeepSeek el texto, desde la 017. Groq queda fuera del proyecto.
+    const transcriptionProvider = settings["transcription_provider"] || "gemini";
+    const summaryProvider = settings["summary_provider"] || "deepseek";
     const chatProvider = providerResolution.effectiveProvider ?? "unconfigured";
 
     // Credenciales de Google Service Account (archivo en disco)
@@ -234,17 +235,17 @@ export const getSystemStatusTool: ToolDefinition<Record<never, never>, SystemSta
     diagnosis.push(
       `ℹ️ Chat tool policy activa: ${toolPolicy.activePolicy} (source: ${toolPolicy.resolutionSource})`,
     );
-    if (!groqConfigured && transcriptionProvider === "groq") {
+    if (!geminiConfigured && transcriptionProvider === "gemini") {
       hasWarningsOrErrors = true;
-      diagnosis.push("⚠️ GROQ_API_KEY no configurada — las transcripciones fallarán");
+      diagnosis.push("⚠️ GEMINI_API_KEY no configurada — las transcripciones fallarán");
     }
-    if (!geminiConfigured && summaryProvider === "gemini") {
+    if (!deepseekConfigured && summaryProvider === "deepseek") {
       hasWarningsOrErrors = true;
-      diagnosis.push("⚠️ GEMINI_API_KEY no configurada — los resúmenes usarán Groq como fallback");
+      diagnosis.push("⚠️ DEEPSEEK_API_KEY no configurada — el resumen y el refinado fallarán");
     }
-    if (!groqConfigured && !geminiConfigured) {
+    if (!deepseekConfigured && !geminiConfigured) {
       hasWarningsOrErrors = true;
-      diagnosis.push("❌ Ningún provider de IA configurado — chat y resúmenes no funcionarán");
+      diagnosis.push("❌ Ningún proveedor de IA configurado — chat y resúmenes no funcionarán");
     }
     if (providerResolution.resolutionSource === "invalid-configured") {
       hasWarningsOrErrors = true;
@@ -272,7 +273,7 @@ export const getSystemStatusTool: ToolDefinition<Record<never, never>, SystemSta
 
     return {
       providers: {
-        groqConfigured,
+        deepseekConfigured,
         geminiConfigured,
         deepgramConfigured,
         transcriptionProvider,

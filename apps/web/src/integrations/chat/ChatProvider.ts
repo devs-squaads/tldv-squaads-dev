@@ -17,7 +17,7 @@ export interface ChatMessage {
   toolCallId?: string;
   /**
    * Solo en mensajes "tool" — nombre de la función ejecutada.
-   * Requerido por Groq.
+   * Formato de mensajes del chat.
    */
   toolName?: string;
 }

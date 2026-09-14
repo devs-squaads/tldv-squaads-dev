@@ -1,9 +1,7 @@
 import type { ChatProvider } from "@/integrations/chat/ChatProvider";
 import { GeminiChatProvider } from "@/integrations/chat/GeminiChatProvider";
-import { GroqChatProvider } from "@/integrations/chat/GroqChatProvider";
 
 const CHAT_PROVIDER_BUILDERS: Record<string, () => ChatProvider> = {
-  groq: () => new GroqChatProvider(),
   gemini: () => new GeminiChatProvider(),
 };
 
@@ -22,7 +20,6 @@ function isChatProviderName(value: string): value is ChatProviderName {
 
 function getAutoProviderName(): string | null {
   if (process.env.GEMINI_API_KEY) return "gemini";
-  if (process.env.GROQ_API_KEY) return "groq";
   return null;
 }
 
@@ -44,9 +41,8 @@ export class ChatProviderFactory {
         };
       }
 
-      const fallbackProvider = configuredProvider === "gemini"
-        ? (process.env.GROQ_API_KEY ? "groq" : null)
-        : (process.env.GEMINI_API_KEY ? "gemini" : null);
+      // Gemini es el único proveedor de chat: no hay otro al que caer.
+      const fallbackProvider = null;
 
       return {
         configuredProvider,
@@ -66,9 +62,7 @@ export class ChatProviderFactory {
       };
     }
 
-    const fallbackProvider = effectiveProvider === "gemini"
-      ? (process.env.GROQ_API_KEY ? "groq" : null)
-      : (process.env.GEMINI_API_KEY ? "gemini" : null);
+    const fallbackProvider = null;
 
     return {
       configuredProvider: null,
@@ -95,7 +89,7 @@ export class ChatProviderFactory {
       }
 
       throw new Error(
-        "No chat provider configured. Set CHAT_PROVIDER or provide GROQ_API_KEY / GEMINI_API_KEY."
+        "No chat provider configured. Set CHAT_PROVIDER or provide GEMINI_API_KEY."
       );
     }
 
@@ -120,7 +114,7 @@ export class ChatProviderFactory {
         return buildProvider(resolution.fallbackProvider);
       }
 
-      throw new Error("No chat provider available. Configure GEMINI_API_KEY or GROQ_API_KEY.");
+      throw new Error("No chat provider available. Configure GEMINI_API_KEY.");
     }
   }
 
