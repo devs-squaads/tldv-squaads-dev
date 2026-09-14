@@ -1,12 +1,15 @@
 import type { SummaryResult } from "@meeting-bot/shared/integrations/ai/summary/types";
 import { SummaryProviderFactory } from "@/integrations/ai/summary/SummaryProviderFactory";
 import type {
+  TranscriptionProvider,
   TranscriptionProviderOptions,
   TranscriptionProviderResult,
   TranscriptionSegment,
 } from "@/integrations/ai/transcription/TranscriptionProvider";
 import { TranscriptionProviderFactory } from "@/integrations/ai/transcription/TranscriptionProviderFactory";
 import { formatTimestampedTranscript, refineTranscriptWithGemini } from "@/services/gemini";
+import { prepareTranscriptionAudio } from "@/services/audioPreprocessing";
+import { mergeChunkSegments } from "@/services/transcriptionInput";
 import {
   getTranscriptionSettings,
   type TranscriptionSettings,
@@ -133,19 +136,71 @@ export async function transcribeRecording(
   options?: TranscriptionProviderOptions,
 ): Promise<TranscriptionProviderResult> {
   const provider = TranscriptionProviderFactory.getProvider();
-  let result: TranscriptionProviderResult;
 
+  // El proveedor recibe SIEMPRE audio, nunca el vídeo: la API de ASR rechaza el MP4 de una reunión
+  // larga con 413 (spec 016). La preparación cubre los dos caminos que transcriben (pipeline y
+  // reprocesado) porque ambos pasan por aquí.
+  const prepared = await prepareTranscriptionAudio(filePath);
+
+  try {
+    if (prepared.files.length === 1) {
+      const result = await runProvider(provider, prepared.files[0], options);
+      return attributeSpeakersIfNeeded(withDuration(result, prepared.durationSeconds));
+    }
+
+    const partials: TranscriptionProviderResult[] = [];
+    for (const file of prepared.files) {
+      partials.push(await runProvider(provider, file, options));
+    }
+
+    // Un proveedor que sólo implementa `transcribe` devuelve texto sin segmentos. Sin este camino, la
+    // fusión (que trabaja sobre segmentos) descartaría todo el texto y la reunión larga se quedaría
+    // sin transcripción. Se concatenan los textos en el orden de los fragmentos.
+    const hasSegments = partials.some((partial) => partial.segments.length > 0);
+    if (!hasSegments) {
+      return attributeSpeakersIfNeeded({
+        text: partials.map((partial) => partial.text.trim()).filter(Boolean).join("\n"),
+        segments: [],
+        durationSeconds: prepared.durationSeconds,
+      });
+    }
+
+    const mergedSegments = mergeChunkSegments(
+      prepared.chunks,
+      partials.map((partial) => partial.segments),
+    );
+
+    return attributeSpeakersIfNeeded({
+      text: formatTimestampedTranscript(mergedSegments),
+      segments: mergedSegments,
+      durationSeconds: prepared.durationSeconds,
+    });
+  } finally {
+    prepared.cleanup();
+  }
+}
+
+async function runProvider(
+  provider: TranscriptionProvider,
+  filePath: string,
+  options?: TranscriptionProviderOptions,
+): Promise<TranscriptionProviderResult> {
   if (provider.transcribeDetailed) {
-    result = await provider.transcribeDetailed(filePath, options);
-  } else {
-    const text = await provider.transcribe(filePath, options);
-    result = {
-      text,
-      segments: [],
-    };
+    return provider.transcribeDetailed(filePath, options);
   }
 
-  return attributeSpeakersIfNeeded(result);
+  const text = await provider.transcribe(filePath, options);
+  return { text, segments: [] };
+}
+
+function withDuration(
+  result: TranscriptionProviderResult,
+  durationSeconds: number,
+): TranscriptionProviderResult {
+  if (result.durationSeconds || !durationSeconds) {
+    return result;
+  }
+  return { ...result, durationSeconds };
 }
 
 /**
