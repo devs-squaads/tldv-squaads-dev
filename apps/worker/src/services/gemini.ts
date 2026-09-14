@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
+import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
 import type { SummaryResult } from "@meeting-bot/shared/integrations/ai/summary/types";
 
 export interface KeyMoment {
@@ -148,7 +149,7 @@ async function generateWithGemini(
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
+  const model = genAI.getGenerativeModel({ model: getAiModels().geminiModel });
 
   const prompt = SUMMARY_PROMPT_PREFIX + buildContextBlock(context) + transcript;
   const result = await model.generateContent(prompt);
@@ -168,7 +169,7 @@ async function generateWithGroq(
   const groq = new Groq({ apiKey });
   const prompt = SUMMARY_PROMPT_PREFIX + buildContextBlock(context) + transcript;
   const result = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+    model: getAiModels().textModel,
     messages: [
       { role: "user", content: prompt },
     ],
@@ -177,14 +178,16 @@ async function generateWithGroq(
   });
 
   const text = result.choices[0]?.message?.content?.trim() || "";
-  console.log("[generateSummary] Groq/Llama response received");
+  console.log("[generateSummary] Groq response received");
   return parseResponse(text, maxDurationSeconds);
 }
 
 /**
  * Formats a timestamped transcription for the AI prompt.
- * Converts segments into "[MM:SS] text" (or "Speaker [MM:SS]: text" when the
- * segment carries a speaker label) so AI can assign accurate timestamps.
+ * Converts segments into "[MM:SS] text", or "Speaker [MM:SS]: text" when the
+ * segment carries a speaker label — la convención del spec 014, del README y del
+ * pipeline de referencia `clean_transcriptions`. El prompt del refiner pide
+ * preservar ese formato, así que serializarlo sin los dos puntos lo contradecía.
  */
 export function formatTimestampedTranscript(
   segments: Array<{ start: number; end: number; text: string; speaker?: string }>
@@ -194,8 +197,7 @@ export function formatTimestampedTranscript(
       const mins = Math.floor(s.start / 60);
       const secs = Math.floor(s.start % 60);
       const ts = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-      const prefix = s.speaker ? `${s.speaker} ` : "";
-      return `${prefix}[${ts}] ${s.text}`;
+      return s.speaker ? `${s.speaker} [${ts}]: ${s.text}` : `[${ts}] ${s.text}`;
     })
     .join("\n");
 }
@@ -292,10 +294,12 @@ async function refineWithGroq(
   const prompt = buildRefinerPrompt(rawTranscript, context, dictionaryTerms, dictionaryPairs);
 
   const result = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+    model: getAiModels().textModel,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
-    max_tokens: 8192,
+    // El refiner reemite el transcript completo: con 8192 tokens se truncaba cualquier reunión
+    // larga y la guarda de fidelidad descartaba el resultado, dejando el diccionario sin aplicar.
+    max_tokens: resolveTextOutputBudget(rawTranscript.length),
   });
 
   const text = result.choices[0]?.message?.content?.trim() || "";
@@ -316,7 +320,7 @@ async function refineWithGemini(
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-3.1-flash-lite",
+    model: getAiModels().geminiModel,
     generationConfig: { temperature: 0.2 },
   });
 
@@ -332,7 +336,7 @@ async function refineWithGemini(
 
 /**
  * Refines a raw transcript by applying user instructions.
- * Tries Groq/Llama first (generous limits), falls back to Gemini.
+ * Intenta primero el modelo de texto de Groq y cae a Gemini si falla.
  */
 export async function refineTranscriptWithGemini(
   rawTranscript: string,

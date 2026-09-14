@@ -231,11 +231,34 @@ bun run dictionary:refine --commit
 | `NEXT_PUBLIC_DEV_AUTH_BYPASS`                                 | `true` para mostrar el botón "Entrar sin Google (dev)" en `/login`. Solo cosmético — la variable server-side de arriba es la que realmente habilita el provider. |
 | `GOOGLE_CALENDAR_ID`                                          | Calendar ID a consultar (`primary` si no se define).                                                                                           |
 | `GOOGLE_CALENDAR_IMPERSONATE_USER`                            | Opcional: solo para Domain-Wide Delegation (Google Workspace). Si el calendario se comparte con la Service Account, dejar vacío.               |
-| `GROQ_API_KEY`                                                | Proveedor principal de transcripción (Whisper) y primera opción actual en resumen del worker (Llama). |
-| `GEMINI_API_KEY`                                              | Fallback actual de resumen en worker y proveedor de chat cuando se selecciona `CHAT_PROVIDER=gemini`. |
+| `GROQ_API_KEY`                                                | Transcripción (Whisper) y primera opción para resumen, refiner y diarización en el worker. |
+| `GEMINI_API_KEY`                                              | Red de seguridad del worker (resumen, refiner, diarización) y proveedor de chat cuando se selecciona `CHAT_PROVIDER=gemini`. |
+| `GROQ_TRANSCRIPTION_MODEL`                                    | Opcional. Modelo de ASR. Default verificado: `whisper-large-v3`. |
+| `GROQ_TEXT_MODEL`                                             | Opcional. Modelo de texto para resumen, refiner y atribución de hablantes. Default verificado: `openai/gpt-oss-120b`. Es de razonamiento: consume tokens antes de responder, así que necesita presupuesto de salida holgado. |
+| `GEMINI_MODEL`                                                | Opcional. Modelo de Gemini. Default verificado: `gemini-3.8-flash`. |
+| `FFMPEG_PATH` / `FFPROBE_PATH`                                | Opcional. Rutas a los binarios de ffmpeg. Por defecto se resuelven del `PATH`. |
 | `OPENAI_API_KEY`                                              | Fallback opcional adicional para resumen. |
 | `DEEPGRAM_API_KEY`                                            | Proveedor alternativo de transcripción (con diarización de hablantes nativa vía `transcribeDetailed`). |
 | `SPEAKER_ATTRIBUTION_ENABLED`                                 | `true` (default) ejecuta atribución de hablantes por LLM cuando el proveedor ASR no diariza (Groq Whisper). `false` la desactiva. Nunca rompe el pipeline: si falla, la transcripción conserva el formato `[MM:SS] texto`. |
+
+### Entrada de transcripción (feature 016)
+
+El worker **no envía el vídeo a la API de ASR**: extrae la pista de audio y la comprime a opus mono
+16 kHz antes de subirla, y trocea con solapamiento si aun así supera el límite del proveedor. Medido
+sobre una reunión real de 53,5 min: 375 MB → 8,95 MB, transcrita en 14,6 s. Antes, ese mismo fichero
+fallaba con `413 request_too_large` y la reunión acababa en `transcription_error` con el vídeo guardado
+y sin transcripción.
+
+### Comprobación de salud del pipeline de IA
+
+```bash
+bun run doctor:ai
+```
+
+Hace llamadas **reales** y mínimas a las cuatro etapas (ASR, modelo de texto, refiner y resumen), dice
+cuál falla y por qué, y sale con código 1 si alguna está caída. Existe porque el pipeline degrada en
+silencio por diseño: un modelo retirado o una cuota agotada no dan error, dan un transcript sin
+hablantes y sin resumen. Si cambias de proveedor o de modelo, ejecútalo.
 
 ### Resumen IA (worker): orden actual de providers
 

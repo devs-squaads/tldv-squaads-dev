@@ -7,6 +7,7 @@
 import Groq from "groq-sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { TranscriptionSegment } from "@/integrations/ai/transcription/TranscriptionProvider";
+import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
 
 const MAX_CHARS_PER_CHUNK = 25000;
 const MAX_SEGMENT_CHARS = 400;
@@ -34,18 +35,27 @@ export function segmentsToLines(segments: TranscriptionSegment[]): string[] {
 
 /** Parte las líneas en chunks que respetan el límite de caracteres. */
 export function chunkLines(lines: string[], maxChars = MAX_CHARS_PER_CHUNK): string[][] {
-  const chunks: string[][] = [];
-  let current: string[] = [];
+  return chunkLineIndexes(lines, maxChars).map((indexes) => indexes.map((i) => lines[i]));
+}
+
+/**
+ * Igual que `chunkLines` pero devolviendo los índices: es lo que permite mapear cada chunk de vuelta
+ * a sus segmentos originales y no perder contenido cuando un chunk no se puede atribuir.
+ */
+export function chunkLineIndexes(lines: string[], maxChars = MAX_CHARS_PER_CHUNK): number[][] {
+  const chunks: number[][] = [];
+  let current: number[] = [];
   let currentLength = 0;
 
-  for (const line of lines) {
-    if (currentLength + line.length + 1 > maxChars && current.length > 0) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const length = lines[i].length + 1;
+    if (currentLength + length > maxChars && current.length > 0) {
       chunks.push(current);
       current = [];
       currentLength = 0;
     }
-    current.push(line);
-    currentLength += line.length + 1;
+    current.push(i);
+    currentLength += length;
   }
 
   if (current.length > 0) {
@@ -55,17 +65,79 @@ export function chunkLines(lines: string[], maxChars = MAX_CHARS_PER_CHUNK): str
   return chunks;
 }
 
+/**
+ * ¿La atribución de un chunk perdió contenido?
+ *
+ * `truncated` es la señal dura (`finish_reason === "length"`: el modelo agotó el presupuesto de
+ * salida). El ratio de caracteres es la red de seguridad para una pérdida parcial que no llegue a
+ * truncar. Mismo umbral del 70 % que ya usa la guarda del refiner, por coherencia.
+ */
+export function isAttributionLossy(
+  inputChars: number,
+  outputChars: number,
+  truncated: boolean,
+  minRatio = 0.7,
+): boolean {
+  if (truncated) return true;
+  if (inputChars <= 0) return outputChars <= 0;
+  return outputChars / inputChars < minRatio;
+}
+
+/** Tolerancia al emparejar un segmento con la línea atribuida más cercana. */
+export const ATTRIBUTION_MATCH_TOLERANCE_SECONDS = 3;
+
+/** Hablante vigente en un instante: el de la última línea atribuida que ya ha empezado. */
+export function speakerAt(
+  timeline: ReadonlyArray<AttributedLine>,
+  timeSeconds: number,
+  toleranceSeconds = ATTRIBUTION_MATCH_TOLERANCE_SECONDS,
+): string | undefined {
+  let speaker: string | undefined;
+
+  for (const line of timeline) {
+    if (line.start <= timeSeconds + toleranceSeconds) {
+      speaker = line.speaker;
+      continue;
+    }
+    break;
+  }
+
+  return speaker;
+}
+
+/**
+ * Aplica una atribución a los segmentos de un chunk **sin descartar ningún segmento**.
+ *
+ * La versión anterior emparejaba por timestamp y tiraba los segmentos que no casaban: si el modelo
+ * fusionaba líneas o se truncaba, ese contenido desaparecía del transcript. Aquí el segmento siempre
+ * se conserva; lo único que puede faltar es la etiqueta de hablante.
+ */
+export function applyAttributionToChunk<T extends TranscriptionSegment>(
+  chunkSegments: ReadonlyArray<T>,
+  timeline: ReadonlyArray<AttributedLine>,
+): T[] {
+  if (!timeline.length) {
+    return [...chunkSegments];
+  }
+
+  const ordered = [...timeline].sort((a, b) => a.start - b.start);
+
+  return chunkSegments.map((segment) => {
+    const speaker = speakerAt(ordered, segment.start);
+    return speaker ? { ...segment, speaker } : { ...segment };
+  });
+}
+
 /** Prompt de atribución (mismo estilo que diarize_llm.py). */
 export function buildAttributionPrompt(chunk: string, partIndex: number, partCount: number): string {
-  return `Eres un transcriptor profesional de reuniones. Tu tarea: reconstruir el DIÁLOGO con hablantes a partir de una transcripción automática (Whisper) que tiene SOLO timestamps [MM:SS], sin nombres de hablante.
+  return `Eres un transcriptor profesional de reuniones. Tu tarea es ETIQUETAR quién habla en una transcripción automática (Whisper) que sólo tiene timestamps [MM:SS]. No es una tarea de redacción ni de resumen: añades una etiqueta delante de cada línea y nada más.
 
 REGLAS:
-1. Conserva el timestamp [MM:SS] exacto de cada línea.
-2. Atribuye un hablante a cada línea: "Participante 1", "Participante 2", ... (máximo 6). Usa el mismo número para la misma voz. Si puedes inferir un nombre del contexto de la conversación (ej. "hola, soy Marta"), úsalo como etiqueta.
-3. NO resumas, NO elimines contenido. Limpia solo muletillas ("eeeeh", "o sea", "vale" repetido) y tartamudeos.
-4. Preserva el tono coloquial.
-5. Si una línea es incomprensible, déjala como "..." y añade "[ininteligible]".
-6. Formato de salida EXACTO por línea (sin títulos ni resumen):
+1. Reemite TODAS las líneas, en el MISMO orden y con el MISMO número de líneas que la entrada. No fusiones líneas, no omitas ninguna, no añadas ninguna.
+2. Conserva el timestamp [MM:SS] exacto y el texto de cada línea tal como viene. No reescribas, no corrijas, no acortes y no "limpies" muletillas: no es tu trabajo y hacerlo destruye contenido de la reunión.
+3. Añade delante de cada línea el hablante: "Participante 1", "Participante 2", ... (máximo 6). Usa el mismo número para la misma voz. Si el contexto revela un nombre (ej. "hola, soy Marta"), úsalo como etiqueta.
+4. Si una línea es incomprensible, deja su texto tal cual.
+5. Formato de salida EXACTO por línea (sin títulos, sin resumen, sin comentarios):
 Participante 1 [MM:SS]: texto
 Participante 2 [MM:SS]: texto
 
@@ -177,50 +249,58 @@ export function attributedLinesToSegments(
   }));
 }
 
-async function attributeWithGroq(
-  chunks: string[][],
-): Promise<string[]> {
+/** Resultado de atribuir un chunk, con la señal de si el modelo agotó su presupuesto de salida. */
+export interface ChunkAttribution {
+  text: string;
+  truncated: boolean;
+}
+
+async function attributeWithGroq(chunks: string[][]): Promise<ChunkAttribution[]> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY no está configurada");
 
   const groq = new Groq({ apiKey });
-  const outputs: string[] = [];
+  const outputs: ChunkAttribution[] = [];
 
   for (let i = 0; i < chunks.length; i += 1) {
-    const prompt = buildAttributionPrompt(chunks[i].join("\n"), i, chunks.length);
+    const chunkText = chunks[i].join("\n");
+    const prompt = buildAttributionPrompt(chunkText, i, chunks.length);
     const result = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: getAiModels().textModel,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      max_tokens: 8192,
+      // La atribución reemite el diálogo con la etiqueta de hablante, así que la salida es del
+      // orden de la entrada: un presupuesto fijo truncaba los fragmentos grandes.
+      max_tokens: resolveTextOutputBudget(chunkText.length),
     });
     const text = result.choices[0]?.message?.content?.trim() || "";
     if (!text) throw new Error("Groq devolvió una respuesta vacía en atribución");
-    outputs.push(text);
+    outputs.push({ text, truncated: result.choices[0]?.finish_reason === "length" });
   }
 
   return outputs;
 }
 
-async function attributeWithGemini(
-  chunks: string[][],
-): Promise<string[]> {
+async function attributeWithGemini(chunks: string[][]): Promise<ChunkAttribution[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY no está configurada");
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-3.1-flash-lite",
+    model: getAiModels().geminiModel,
     generationConfig: { temperature: 0.2 },
   });
-  const outputs: string[] = [];
+  const outputs: ChunkAttribution[] = [];
 
   for (let i = 0; i < chunks.length; i += 1) {
-    const prompt = buildAttributionPrompt(chunks[i].join("\n"), i, chunks.length);
+    const chunkText = chunks[i].join("\n");
+    const prompt = buildAttributionPrompt(chunkText, i, chunks.length);
     const result = await model.generateContent(prompt);
     const text = result.response.text().trim();
     if (!text) throw new Error("Gemini devolvió una respuesta vacía en atribución");
-    outputs.push(text);
+    const finishReason = (result.response.candidates?.[0] as { finishReason?: string } | undefined)
+      ?.finishReason;
+    outputs.push({ text, truncated: finishReason === "MAX_TOKENS" });
   }
 
   return outputs;
@@ -228,7 +308,12 @@ async function attributeWithGemini(
 
 /**
  * Atribuye hablantes a segmentos sin speaker vía LLM (Groq → Gemini fallback).
- * Lanza si falla: el caller decide degradar al formato sin hablantes.
+ *
+ * Nunca pierde contenido: si un chunk se trunca o adelgaza demasiado, sus segmentos se conservan sin
+ * hablante en vez de descartarse. Antes, un chunk truncado hacía desaparecer del transcript todo lo
+ * que el modelo no hubiera llegado a reemitir — medido: 4 minutos de una reunión de 53.
+ *
+ * Lanza sólo si NINGÚN chunk se pudo atribuir: el caller degrada entonces al formato sin hablantes.
  */
 export async function attributeSpeakersToSegments(
   segments: TranscriptionSegment[],
@@ -238,13 +323,14 @@ export async function attributeSpeakersToSegments(
     return segments;
   }
 
-  const chunks = chunkLines(lines);
+  const lineIndexes = chunkLineIndexes(lines);
+  const prompts = lineIndexes.map((indexes) => indexes.map((i) => lines[i]));
 
-  let outputs: string[] | null = null;
+  let outputs: ChunkAttribution[] | null = null;
 
   if (process.env.GROQ_API_KEY) {
     try {
-      outputs = await attributeWithGroq(chunks);
+      outputs = await attributeWithGroq(prompts);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[speakerAttribution] Groq falló (${msg}), fallback a Gemini...`);
@@ -252,15 +338,42 @@ export async function attributeSpeakersToSegments(
   }
 
   if (!outputs && process.env.GEMINI_API_KEY) {
-    outputs = await attributeWithGemini(chunks);
+    outputs = await attributeWithGemini(prompts);
   }
 
   if (!outputs) {
     throw new Error("No hay API key configurada para atribución de hablantes (GROQ_API_KEY o GEMINI_API_KEY)");
   }
 
-  const attributed = outputs.flatMap((out) => parseAttributedLines(out));
-  return attributedLinesToSegments(attributed, segments);
+  const result: TranscriptionSegment[] = [];
+  let lossyChunks = 0;
+
+  for (let c = 0; c < lineIndexes.length; c += 1) {
+    const chunkSegments = lineIndexes[c].map((i) => segments[i]);
+    const inputChars = prompts[c].join("\n").length;
+    const outcome = outputs[c];
+    const parsed = outcome ? parseAttributedLines(outcome.text) : [];
+    const parsedChars = parsed.reduce((sum, line) => sum + line.text.length, 0);
+
+    if (!outcome || isAttributionLossy(inputChars, parsedChars, outcome.truncated)) {
+      lossyChunks += 1;
+      console.warn(
+        `[speakerAttribution] Chunk ${c + 1}/${lineIndexes.length} descartado ` +
+        `(truncado=${outcome?.truncated ?? "sin respuesta"}, ${inputChars}->${parsedChars} chars): ` +
+        `se conservan sus segmentos sin hablante para no perder contenido.`,
+      );
+      result.push(...chunkSegments);
+      continue;
+    }
+
+    result.push(...applyAttributionToChunk(chunkSegments, parsed));
+  }
+
+  if (lossyChunks === lineIndexes.length) {
+    throw new Error("Ningún chunk se pudo atribuir sin pérdida de contenido");
+  }
+
+  return result;
 }
 
 /** Atribución con límite de texto por segmento (protección de prompts enormes). */

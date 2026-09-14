@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 import fs from "fs";
 import type { TranscriptionProviderOptions } from "@/integrations/ai/transcription/TranscriptionProvider";
+import { getAiModels } from "@/services/aiModels";
 
 export interface TranscriptSegment {
   start: number;
@@ -71,11 +72,12 @@ export async function transcribeAudioWithTimestamps(
 
   const groq = new Groq({ apiKey });
   const prompt = buildPrompt(options);
+  const { transcriptionModel } = getAiModels();
 
   try {
     const transcription = await groq.audio.transcriptions.create({
       file: fs.createReadStream(filePath),
-      model: "whisper-large-v3",
+      model: transcriptionModel,
       language: "es",
       ...(prompt ? { prompt } : {}),
       response_format: "verbose_json",
