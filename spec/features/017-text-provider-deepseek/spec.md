@@ -1,20 +1,24 @@
-# 017 · Proveedor de texto DeepSeek y retirada de Groq del camino de texto
+# 017 · Sin Groq: Gemini para audio y DeepSeek para texto
 
 **Estado:** spec (proposal confirmed)
 
 ## Propósito
 
-Decisión de la persona (2026-09-14): **nada de Groq** para el texto. Groq se usaba en cinco sitios y
-tres de ellos (resumen, refiner y diarización) apuntaban a `llama-3.3-70b-versatile`, un modelo que ya
-no existe en la cuenta: es la causa directa de que la 016 encontrara tres etapas caídas.
+Decisión de la persona (2026-09-14): **no se usa Groq**. Groq estaba en cinco sitios y tres de ellos
+(resumen, refiner y diarización) apuntaban a `llama-3.3-70b-versatile`, un modelo que ya no existe en la
+cuenta: es la causa directa de que la 016 encontrara tres etapas caídas.
 
-La feature 016 dejó el pipeline funcionando con `openai/gpt-oss-120b` de Groq, que era lo único
-verificado entonces. Esta feature mueve el texto a **DeepSeek** (`deepseek-flash`), verificado con
-llamadas reales, y deja el camino de texto sin dependencia de Groq.
+El reparto nuevo, verificado con llamadas reales antes de escribir código:
 
-Groq **sigue siendo el proveedor de ASR** (Whisper) en esta feature: no hay alternativa verificada
-todavía porque la clave de Gemini está con el tope de gasto mensual agotado. Eso se decide aparte, y se
-declara aquí para que no parezca un olvido.
+| Camino | Proveedor | Por qué |
+|---|---|---|
+| **Audio** (transcribir + diarizar) | **Gemini 3.8 Flash** | Acepta audio y **diariza de forma acústica**: distingue las voces del propio audio, no las infiere del texto. Medido en la reunión real de 53,5 min por el pipeline completo: 119,3 s, 365/365 segmentos con hablante, nombres reales y cobertura hasta [52:57] |
+| **Texto** (refiner + resumen) | **DeepSeek `deepseek-flash`** | API compatible con OpenAI, verificada. Con razonamiento desactivado, 7,7 s frente a 23,1 s en las tareas de copia |
+| Respaldo de texto | Gemini 3.8 Flash | Se activa solo si el primario falla o se agota su tiempo |
+
+Groq desaparece del worker y del chat de la web. Además, el ASR deja de necesitar el paso aparte de
+atribución de hablantes por LLM: Gemini devuelve los hablantes en la misma respuesta, así que se ahorra
+una llamada y desaparece el problema de identidades que se reinician entre fragmentos.
 
 ## Medido antes de escribir código (2026-09-14)
 
@@ -126,8 +130,11 @@ las que requieren juicio (resumen, capítulos, acciones) DEBEN dejarlo activo.
 
 ## Fuera de alcance (declarado)
 
-- **Mover el ASR fuera de Groq.** Whisper sigue siendo el transcriptor porque la alternativa acordada
-  (`gemini-3.8-flash` con entrada de audio) está bloqueada por el tope de gasto mensual del proyecto de
-  Gemini. En cuanto se levante, cambiar es una variable de entorno más la implementación del proveedor.
-- **Quitar el SDK de Groq del worker**, porque el ASR lo sigue usando.
-- **Nombres reales de hablante**: sigue en su propia feature.
+- **Reconciliación de identidades cuando haya que trocear el audio.** Si el audio supera el límite en
+  línea de Gemini (~12 MB, unas 2,3 h de opus), cada fragmento se diariza por separado y las etiquetas
+  pueden reiniciarse. La reunión medida (8,96 MB de audio) entra en una sola petición, así que la
+  diarización es consistente de principio a fin; el troceo queda como red de seguridad.
+- **Nombres reales garantizados.** Gemini los deduce del contexto y en la prueba real acertó (`Eduardo`,
+  `Marta`, `Junior`), pero cuando no hay evidencia usa `Hablante N`. No se inventan identidades.
+- **Quitar el SDK `openai` del worker**: lo sigue usando el proveedor de resumen de OpenAI.
+- **Rediseñar el catálogo de diagnósticos del chat** más allá de sustituir los proveedores.

@@ -14,8 +14,9 @@ import os from "os";
 import path from "path";
 import { spawn } from "child_process";
 import { getAiModels, resolveAiModels } from "@/services/aiModels";
+import { TextGenerationProviderFactory } from "@/integrations/ai/text/TextGenerationProviderFactory";
 import { transcribeRecording } from "@/services/meetingAiProcessingService";
-import { refineTranscriptWithGemini } from "@/services/gemini";
+import { refineTranscript } from "@/services/gemini";
 import { SummaryProviderFactory } from "@/integrations/ai/summary/SummaryProviderFactory";
 
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
@@ -68,7 +69,7 @@ async function checkAsr(): Promise<StageResult> {
     return {
       stage,
       ok: true,
-      detail: `aceptó el audio (modelo ${getAiModels().transcriptionModel}, ${result.segments.length} segmentos)`,
+      detail: `aceptó el audio (${getAiModels().geminiModel}, ${result.segments.length} segmentos)`,
     };
   } catch (error: unknown) {
     return { stage, ok: false, detail: describe(error) };
@@ -80,35 +81,32 @@ async function checkAsr(): Promise<StageResult> {
 }
 
 async function checkTextModel(): Promise<StageResult> {
-  const stage = "modelo de texto (Groq)";
-  const model = getAiModels().textModel;
+  const stage = "modelo de texto";
+  const provider = TextGenerationProviderFactory.getProvider();
 
   try {
-    const { default: Groq } = await import("groq-sdk");
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) throw new Error("GROQ_API_KEY no está configurada");
-
-    const groq = new Groq({ apiKey });
-    const result = await groq.chat.completions.create({
-      model,
-      messages: [{ role: "user", content: "Responde solo con la palabra OK" }],
+    const result = await TextGenerationProviderFactory.generate({
+      user: "Responde solo con la palabra OK",
+      temperature: 0,
+      reasoning: "off",
     });
-    const text = result.choices[0]?.message?.content?.trim() || "";
 
     return {
       stage,
-      ok: Boolean(text),
-      detail: text ? `respondió con "${text.slice(0, 20)}"` : "respondió vacío (¿modelo de razonamiento sin presupuesto?)",
+      ok: Boolean(result.text),
+      detail: result.text
+        ? `${result.provider}/${result.model} respondió con "${result.text.slice(0, 20)}"`
+        : `${result.provider} respondió vacío`,
     };
   } catch (error: unknown) {
-    return { stage, ok: false, detail: `modelo "${model}": ${describe(error)}` };
+    return { stage, ok: false, detail: `${provider.name}: ${describe(error)}` };
   }
 }
 
 async function checkRefiner(): Promise<StageResult> {
   const stage = "refiner (diccionario/contexto)";
   try {
-    const refined = await refineTranscriptWithGemini(SAMPLE_TRANSCRIPT, "Reunión interna de Squaads");
+    const refined = await refineTranscript(SAMPLE_TRANSCRIPT, "Reunión interna de Squaads");
     return {
       stage,
       ok: refined.trim().length > 0,
@@ -142,10 +140,11 @@ async function main() {
   const { models, warnings } = resolveAiModels();
 
   console.log("doctor:ai · comprobación del pipeline de IA\n");
-  console.log(`  ASR        ${models.transcriptionModel}`);
-  console.log(`  texto      ${models.textModel}`);
-  console.log(`  gemini     ${models.geminiModel}`);
-  console.log(`  claves     GROQ=${Boolean(process.env.GROQ_API_KEY)} GEMINI=${Boolean(process.env.GEMINI_API_KEY)}`);
+  console.log(`  audio      ${models.geminiModel}   (transcribe y diariza)`);
+  console.log(`  texto      ${models.deepseekModel}   (refiner y resumen)`);
+  console.log(
+    `  claves     DEEPSEEK=${Boolean(process.env.DEEPSEEK_API_KEY)} GEMINI=${Boolean(process.env.GEMINI_API_KEY)}`,
+  );
   for (const warning of warnings) {
     console.log(`  AVISO      ${warning}`);
   }

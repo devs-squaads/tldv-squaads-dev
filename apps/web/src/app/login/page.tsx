@@ -122,7 +122,7 @@ export default function LoginPage() {
                   {
                     icon: FileText,
                     title: "Transcripción precisa",
-                    desc: "Powered by Groq — transcripción en tiempo real",
+                    desc: "Transcripción con Gemini en tiempo real",
                   },
                   {
                     icon: Brain,

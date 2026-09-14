@@ -7,7 +7,7 @@ import type {
   TranscriptionSegment,
 } from "@/integrations/ai/transcription/TranscriptionProvider";
 import { TranscriptionProviderFactory } from "@/integrations/ai/transcription/TranscriptionProviderFactory";
-import { formatTimestampedTranscript, refineTranscriptWithGemini } from "@/services/gemini";
+import { formatTimestampedTranscript, refineTranscript } from "@/services/gemini";
 import { prepareTranscriptionAudio } from "@/services/audioPreprocessing";
 import { mergeChunkSegments } from "@/services/transcriptionInput";
 import {
@@ -88,7 +88,7 @@ export async function refineTranscriptionResult(
   }
 
   try {
-    const refinedText = await refineTranscriptWithGemini(
+    const refinedText = await refineTranscript(
       rawInput,
       context,
       settings.dictionaryTerms,
@@ -140,7 +140,10 @@ export async function transcribeRecording(
   // El proveedor recibe SIEMPRE audio, nunca el vídeo: la API de ASR rechaza el MP4 de una reunión
   // larga con 413 (spec 016). La preparación cubre los dos caminos que transcriben (pipeline y
   // reprocesado) porque ambos pasan por aquí.
-  const prepared = await prepareTranscriptionAudio(filePath);
+  //
+  // El límite lo declara el proveedor, así que el troceo se ajusta a él y no a un valor cableado: el
+  // de Gemini (datos en línea, ~12 MB) es bastante menor que el de Deepgram.
+  const prepared = await prepareTranscriptionAudio(filePath, { maxBytes: provider.maxInputBytes });
 
   try {
     if (prepared.files.length === 1) {

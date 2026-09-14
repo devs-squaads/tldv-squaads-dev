@@ -64,7 +64,7 @@ export const CHAT_DOCUMENT_CORPUS: KnowledgeDocument[] = [
     title: "Transcripción fallida",
     tags: ["transcripcion", "errores", "api"],
     content:
-      "Verificar GROQ_API_KEY o DEEPGRAM_API_KEY, conectividad y tamaño/calidad del audio. Si falta la transcripción, revisar estado de la reunión y logs del worker.",
+      "Verificar GEMINI_API_KEY o DEEPGRAM_API_KEY, conectividad y tamaño/calidad del audio. Si falta la transcripción, revisar estado de la reunión y logs del worker.",
   },
   {
     id: "troubleshooting-summary",
