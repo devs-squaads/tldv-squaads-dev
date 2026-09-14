@@ -1,9 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requestWorkerAutoJoinPoll } from "@/services/workerRecoveryClient";
+import { assertPrivateApiAuthorized } from "@/services/privateApiAuth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+/**
+ * Disparador manual/por cron del ciclo de auto-join del worker (spec 015).
+ * Antes era anónimo: cualquiera en internet podía provocar que el bot se uniera a reuniones.
+ * Se exige el `API_ROUTE_SECRET` compartido, igual que el resto de rutas internas.
+ */
+export async function GET(request: NextRequest) {
+  const unauthorized = assertPrivateApiAuthorized(request);
+  if (unauthorized) return unauthorized;
+
   try {
     const result = await requestWorkerAutoJoinPoll();
 

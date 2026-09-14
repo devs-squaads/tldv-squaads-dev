@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertExtensionAccessAuthorized } from "@/services/extensionTokens";
-import { MeetingRepository } from "@meeting-bot/shared/repositories/MeetingRepository";
+import { WebMeetingRepository } from "@/repositories/WebMeetingRepository";
 import { buildRecordingStorageKey } from "@meeting-bot/shared/meetingProvider";
 import { StorageProviderFactory } from "@meeting-bot/shared/integrations/storage/StorageProviderFactory";
 
@@ -19,7 +19,10 @@ export async function GET(
     return NextResponse.json({ error: "Meeting ID is required" }, { status: 400 });
   }
 
-  const meeting = await MeetingRepository.findById(id);
+  // Un token de extensión válido sólo identifica a quien lo tiene, no le da acceso a cualquier
+  // reunión: se aplica la misma regla de visibilidad que el dashboard (owner o Access Grant vivo).
+  // Antes, cualquier extensión vinculada podía leer la reunión de cualquier otra persona por id.
+  const meeting = await WebMeetingRepository.findByIdForUser(auth.payload.userId, id);
   if (!meeting) {
     return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
   }
