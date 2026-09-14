@@ -153,6 +153,18 @@ export async function transcribeRecording(
       partials.push(await runProvider(provider, file, options));
     }
 
+    // Un proveedor que sólo implementa `transcribe` devuelve texto sin segmentos. Sin este camino, la
+    // fusión (que trabaja sobre segmentos) descartaría todo el texto y la reunión larga se quedaría
+    // sin transcripción. Se concatenan los textos en el orden de los fragmentos.
+    const hasSegments = partials.some((partial) => partial.segments.length > 0);
+    if (!hasSegments) {
+      return attributeSpeakersIfNeeded({
+        text: partials.map((partial) => partial.text.trim()).filter(Boolean).join("\n"),
+        segments: [],
+        durationSeconds: prepared.durationSeconds,
+      });
+    }
+
     const mergedSegments = mergeChunkSegments(
       prepared.chunks,
       partials.map((partial) => partial.segments),

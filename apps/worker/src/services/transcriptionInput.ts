@@ -93,35 +93,40 @@ export interface AbsoluteSegment {
  * Fusiona los resultados de varios fragmentos en una línea temporal absoluta.
  *
  * Cada fragmento se transcribió empezando en cero, así que sus marcas se desplazan por el inicio del
- * fragmento. En la zona de solape las dos transcripciones contienen las mismas palabras, así que se
- * descarta el segmento que **empieza** en un instante ya cubierto por el fragmento anterior.
+ * fragmento.
  *
- * Compromiso declarado: un segmento que empiece dentro del solape y se prolongue más allá se
- * descarta entero, con lo que se pierden como mucho `overlapSeconds` de audio en la costura. La
- * alternativa (conservarlo) duplicaría texto, que se nota mucho más al leer.
+ * Deduplicación: se descarta un segmento **sólo si está completamente cubierto** por fragmentos
+ * anteriores. Un segmento que empieza dentro del solape pero se prolonga más allá se conserva entero,
+ * aunque eso duplique unas palabras en la costura: perder contenido es peor que repetirlo, y no hay
+ * forma fiable de separar por tiempo el texto repetido del nuevo. Los solapes *dentro* de un mismo
+ * fragmento no se tocan nunca.
  */
 export function mergeChunkSegments<T extends AbsoluteSegment>(
   chunks: ReadonlyArray<Pick<AudioChunk, "startSeconds">>,
   results: ReadonlyArray<ReadonlyArray<T>>,
 ): Array<Omit<T, "start" | "end"> & AbsoluteSegment> {
   const merged: Array<Omit<T, "start" | "end"> & AbsoluteSegment> = [];
-  let coveredUntil = Number.NEGATIVE_INFINITY;
+  /** Hasta dónde llega lo cubierto por fragmentos ANTERIORES. */
+  let coveredByEarlierChunks = Number.NEGATIVE_INFINITY;
+  let highestEndSoFar = Number.NEGATIVE_INFINITY;
 
   for (let i = 0; i < chunks.length; i += 1) {
     const offset = chunks[i].startSeconds;
-    const segments = results[i] ?? [];
 
-    for (const segment of segments) {
+    for (const segment of results[i] ?? []) {
       const absoluteStart = segment.start + offset;
       const absoluteEnd = segment.end + offset;
 
-      if (absoluteStart < coveredUntil) {
-        continue; // arranca en territorio ya cubierto: es el eco de la zona de solape
+      if (absoluteEnd <= coveredByEarlierChunks) {
+        continue; // redundante: ya estaba cubierto entero por un fragmento anterior
       }
 
       merged.push({ ...segment, start: absoluteStart, end: absoluteEnd });
-      coveredUntil = Math.max(coveredUntil, absoluteEnd);
+      highestEndSoFar = Math.max(highestEndSoFar, absoluteEnd);
     }
+
+    // Al cerrar el fragmento, su cobertura pasa a ser la referencia para el siguiente.
+    coveredByEarlierChunks = highestEndSoFar;
   }
 
   return merged;

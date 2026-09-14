@@ -119,6 +119,12 @@ que esta clase de avería silenciosa se detecte en un comando y no en una demo.
 
 ## Fuera de alcance (declarado)
 
+- **Reconciliación de identidades de hablante entre fragmentos.** Si hay que trocear el audio y el
+  proveedor diariza de forma nativa (Deepgram), cada fragmento numera sus hablantes desde cero: el
+  `Participante 1` del fragmento 2 puede ser una persona distinta del `Participante 1` del fragmento 1, y
+  la fusión conserva las etiquetas sin reconciliarlas. Afecta sólo al camino de troceo (reuniones de más
+  de ~2,3 h, que hoy no ocurren) y a la diarización nativa. Se acepta y se declara; reconciliar
+  identidades por voz es un problema aparte.
 - **Sustituir el ASR por `gemini-3.5-transcribe` o `gemini-3.8-flash`**: la clave de Gemini tiene el tope
   de gasto mensual agotado, así que no se puede verificar hoy. La configuración de modelos queda lista
   para hacerlo con un cambio de variable cuando la persona levante el tope.

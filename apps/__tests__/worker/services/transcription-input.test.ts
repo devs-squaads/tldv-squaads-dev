@@ -109,13 +109,12 @@ describe("mergeChunkSegments (spec 016)", () => {
     ]);
   });
 
-  it("drops the duplicated segment from the overlap region", () => {
-    // El fragmento 2 arranca en 895, así que su [0,10] es el [895,905] absoluto: solapa con el
-    // segmento [890,900] del fragmento 1 y se descarta por completo.
+  it("drops only a segment that is COMPLETELY covered by the previous chunk", () => {
+    // [895,905] absoluto cae entero dentro de la cobertura [890,910] del fragmento anterior: es un eco.
     const merged = mergeChunkSegments(
       [{ startSeconds: 0 }, { startSeconds: 895 }],
       [
-        [{ start: 890, end: 900, text: "repetido" }],
+        [{ start: 890, end: 910, text: "repetido" }],
         [{ start: 0, end: 10, text: "repetido" }],
       ],
     );
@@ -124,13 +123,38 @@ describe("mergeChunkSegments (spec 016)", () => {
     expect(merged[0].text).toBe("repetido");
   });
 
-  it("keeps what comes after the overlap", () => {
+  it("conserva el segmento que cruza la costura y aporta texto nuevo", () => {
+    // Regresión que detectó la revisión de frontera: [895,925] absoluto NO está cubierto por
+    // [890,900], así que descartarlo perdía 25 s de contenido, no los 5 s del solapamiento.
     const merged = mergeChunkSegments(
       [{ startSeconds: 0 }, { startSeconds: 895 }],
       [
         [{ start: 890, end: 900, text: "repetido" }],
+        [{ start: 0, end: 30, text: "repetido y nuevo" }],
+      ],
+    );
+
+    expect(merged).toHaveLength(2);
+    expect(merged[1]).toEqual({ start: 895, end: 925, text: "repetido y nuevo" });
+  });
+
+  it("no toca los solapamientos dentro de un mismo fragmento", () => {
+    // Whisper puede devolver segmentos solapados entre sí dentro del mismo audio.
+    const merged = mergeChunkSegments(
+      [{ startSeconds: 0 }],
+      [[{ start: 0, end: 10, text: "uno" }, { start: 5, end: 20, text: "dos" }]],
+    );
+
+    expect(merged.map((s) => s.text)).toEqual(["uno", "dos"]);
+  });
+
+  it("keeps what comes after the overlap", () => {
+    const merged = mergeChunkSegments(
+      [{ startSeconds: 0 }, { startSeconds: 895 }],
+      [
+        [{ start: 890, end: 910, text: "repetido" }],
         [
-          { start: 0, end: 10, text: "repetido" },
+          { start: 0, end: 10, text: "eco" },
           { start: 20, end: 30, text: "nuevo" },
         ],
       ],

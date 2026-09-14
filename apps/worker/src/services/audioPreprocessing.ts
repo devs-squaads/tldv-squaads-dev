@@ -22,9 +22,20 @@ import {
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
 const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
 
-/** Bitrate bajo el cual 2,3 horas de reunión caben en el límite de 25 MB. */
-const AUDIO_BITRATE = "24k";
 const AUDIO_SAMPLE_RATE = "16000";
+
+/**
+ * Codificadores admitidos, en orden de preferencia.
+ *
+ * `libopus` es el más eficiente para voz (53,5 min → 8,96 MB medidos), pero es una librería externa:
+ * si el build de ffmpeg de la imagen no la trae, la extracción fallaría SIEMPRE en producción y nunca
+ * en la máquina de desarrollo. `aac` es el codificador nativo de ffmpeg — el mismo que ya usa la
+ * grabación en `OnlineMeetingProvider.record()`, así que está probado en esta misma imagen.
+ */
+const AUDIO_CODECS = [
+  { codec: "libopus", extension: ".ogg", bitrate: "24k" },
+  { codec: "aac", extension: ".m4a", bitrate: "48k" },
+] as const;
 
 export interface PreparedTranscriptionAudio {
   /** Ficheros de audio a transcribir, en orden. Uno solo si no hubo que trocear. */
@@ -85,6 +96,42 @@ export async function probeDurationSeconds(filePath: string): Promise<number> {
   });
 }
 
+/**
+ * Extrae y comprime la pista de audio. Prueba los codificadores en orden y se queda con el primero
+ * que el ffmpeg instalado sepa usar, para que un build sin `libopus` no tumbe el pipeline entero.
+ */
+async function extractAudio(inputPath: string, workDir: string): Promise<string> {
+  let lastError: unknown;
+
+  for (const candidate of AUDIO_CODECS) {
+    const target = path.join(workDir, `audio${candidate.extension}`);
+    try {
+      await runCommand(FFMPEG, [
+        "-v", "error",
+        "-y",
+        "-i", inputPath,
+        "-vn",
+        "-ac", "1",
+        "-ar", AUDIO_SAMPLE_RATE,
+        "-c:a", candidate.codec,
+        "-b:a", candidate.bitrate,
+        target,
+      ]);
+      return target;
+    } catch (error: unknown) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[audioPreprocessing] El codificador ${candidate.codec} no sirvió (${message.slice(0, 160)}); ` +
+        `probando el siguiente.`,
+      );
+    }
+  }
+
+  const reason = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`Ningún codificador de audio disponible: ${reason.slice(0, 300)}`);
+}
+
 export async function prepareTranscriptionAudio(
   inputPath: string,
   options: PrepareOptions = {},
@@ -105,19 +152,7 @@ export async function prepareTranscriptionAudio(
 
   try {
     const durationSeconds = await probeDurationSeconds(inputPath);
-    const extractedPath = path.join(workDir, "audio.ogg");
-
-    await runCommand(FFMPEG, [
-      "-v", "error",
-      "-y",
-      "-i", inputPath,
-      "-vn",
-      "-ac", "1",
-      "-ar", AUDIO_SAMPLE_RATE,
-      "-c:a", "libopus",
-      "-b:a", AUDIO_BITRATE,
-      extractedPath,
-    ]);
+    const extractedPath = await extractAudio(inputPath, workDir);
 
     const audioBytes = fs.statSync(extractedPath).size;
     const plan = planTranscriptionInput({ audioBytes, durationSeconds, maxBytes });
@@ -133,8 +168,9 @@ export async function prepareTranscriptionAudio(
     }
 
     const files: string[] = [];
+    const extension = path.extname(extractedPath);
     for (const chunk of plan.chunks) {
-      const chunkPath = path.join(workDir, `audio-${String(chunk.index).padStart(3, "0")}.ogg`);
+      const chunkPath = path.join(workDir, `audio-${String(chunk.index).padStart(3, "0")}${extension}`);
       await runCommand(FFMPEG, [
         "-v", "error",
         "-y",

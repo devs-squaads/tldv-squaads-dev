@@ -9,7 +9,15 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { TranscriptionSegment } from "@/integrations/ai/transcription/TranscriptionProvider";
 import { getAiModels, resolveTextOutputBudget } from "@/services/aiModels";
 
-const MAX_CHARS_PER_CHUNK = 25000;
+/**
+ * Tamaño máximo de cada fragmento que se manda al LLM.
+ *
+ * Medido sobre una reunión real de 53,5 min: con 25 000 caracteres el modelo condensaba el fragmento
+ * a la mitad (24 974 → 14 113 caracteres) y la guarda de fidelidad lo descartaba, dejando media
+ * reunión sin hablantes. La tarea es reemitir el texto entero, y eso se vuelve poco fiable cuando la
+ * salida esperada es de miles de tokens: fragmentos más pequeños se copian fielmente.
+ */
+const MAX_CHARS_PER_CHUNK = 8000;
 const MAX_SEGMENT_CHARS = 400;
 
 export function isSpeakerAttributionEnabled(): boolean {
@@ -83,10 +91,19 @@ export function isAttributionLossy(
   return outputChars / inputChars < minRatio;
 }
 
-/** Tolerancia al emparejar un segmento con la línea atribuida más cercana. */
+/** Tolerancia para un desfase hacia delante cuando NADA ha empezado todavía. */
 export const ATTRIBUTION_MATCH_TOLERANCE_SECONDS = 3;
 
-/** Hablante vigente en un instante: el de la última línea atribuida que ya ha empezado. */
+/**
+ * Hablante vigente en un instante: el de la última línea atribuida que ya ha empezado.
+ *
+ * La tolerancia NO se aplica hacia delante cuando ya hay una línea vigente: si se aplicara, un turno
+ * futuro a menos de `toleranceSeconds` robaría el segmento actual (con Ana en 0 s y Luis en 2 s, el
+ * segmento de 0 s se atribuía a Luis). Sólo se usa cuando el instante consultado cae antes de la
+ * primera línea, para absorber un desfase de arranque.
+ *
+ * Requiere `timeline` ordenada por `start` ascendente.
+ */
 export function speakerAt(
   timeline: ReadonlyArray<AttributedLine>,
   timeSeconds: number,
@@ -95,14 +112,19 @@ export function speakerAt(
   let speaker: string | undefined;
 
   for (const line of timeline) {
-    if (line.start <= timeSeconds + toleranceSeconds) {
+    if (line.start <= timeSeconds) {
       speaker = line.speaker;
       continue;
     }
     break;
   }
 
-  return speaker;
+  if (speaker !== undefined) {
+    return speaker;
+  }
+
+  const first = timeline[0];
+  return first && first.start <= timeSeconds + toleranceSeconds ? first.speaker : undefined;
 }
 
 /**
@@ -129,7 +151,18 @@ export function applyAttributionToChunk<T extends TranscriptionSegment>(
 }
 
 /** Prompt de atribución (mismo estilo que diarize_llm.py). */
-export function buildAttributionPrompt(chunk: string, partIndex: number, partCount: number): string {
+export function buildAttributionPrompt(
+  chunk: string,
+  partIndex: number,
+  partCount: number,
+  knownSpeakers: ReadonlyArray<string> = [],
+): string {
+  const roster = knownSpeakers.length
+    ? `\n\nHABLANTES YA IDENTIFICADOS en las partes anteriores: ${knownSpeakers.join(", ")}.
+Si alguno de ellos vuelve a hablar en esta parte, reutiliza EXACTAMENTE su misma etiqueta. No inventes
+etiquetas nuevas si puede ser uno de los anteriores, y no reutilices una etiqueta para una voz distinta.`
+    : "";
+
   return `Eres un transcriptor profesional de reuniones. Tu tarea es ETIQUETAR quién habla en una transcripción automática (Whisper) que sólo tiene timestamps [MM:SS]. No es una tarea de redacción ni de resumen: añades una etiqueta delante de cada línea y nada más.
 
 REGLAS:
@@ -139,7 +172,7 @@ REGLAS:
 4. Si una línea es incomprensible, deja su texto tal cual.
 5. Formato de salida EXACTO por línea (sin títulos, sin resumen, sin comentarios):
 Participante 1 [MM:SS]: texto
-Participante 2 [MM:SS]: texto
+Participante 2 [MM:SS]: texto${roster}
 
 TRANSCRIPCIÓN (parte ${partIndex + 1} de ${partCount}):
 ${chunk}`;
@@ -255,20 +288,44 @@ export interface ChunkAttribution {
   truncated: boolean;
 }
 
+/** Máximo de hablantes que el prompt admite. */
+export const MAX_SPEAKERS = 6;
+
+/**
+ * Acumula en orden de aparición las etiquetas nuevas de un chunk, sin duplicados y sin pasar del
+ * máximo. Es el censo que se le pasa al chunk siguiente para que no reinicie la numeración: sin él,
+ * cada fragmento llama "Participante 1" a quien domina en él, y la misma persona cambia de etiqueta
+ * a lo largo de la reunión.
+ */
+export function accumulateSpeakerRoster(
+  roster: ReadonlyArray<string>,
+  attributed: ReadonlyArray<AttributedLine>,
+): string[] {
+  const next = [...roster];
+
+  for (const line of attributed) {
+    if (next.length >= MAX_SPEAKERS) break;
+    if (!next.includes(line.speaker)) next.push(line.speaker);
+  }
+
+  return next;
+}
+
 async function attributeWithGroq(chunks: string[][]): Promise<ChunkAttribution[]> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY no está configurada");
 
   const groq = new Groq({ apiKey });
   const outputs: ChunkAttribution[] = [];
+  let roster: string[] = [];
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunkText = chunks[i].join("\n");
-    const prompt = buildAttributionPrompt(chunkText, i, chunks.length);
+    const prompt = buildAttributionPrompt(chunkText, i, chunks.length, roster);
     const result = await groq.chat.completions.create({
       model: getAiModels().textModel,
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
+      temperature: 0, // determinista: la tarea es copiar, no redactar
       // La atribución reemite el diálogo con la etiqueta de hablante, así que la salida es del
       // orden de la entrada: un presupuesto fijo truncaba los fragmentos grandes.
       max_tokens: resolveTextOutputBudget(chunkText.length),
@@ -276,6 +333,7 @@ async function attributeWithGroq(chunks: string[][]): Promise<ChunkAttribution[]
     const text = result.choices[0]?.message?.content?.trim() || "";
     if (!text) throw new Error("Groq devolvió una respuesta vacía en atribución");
     outputs.push({ text, truncated: result.choices[0]?.finish_reason === "length" });
+    roster = accumulateSpeakerRoster(roster, parseAttributedLines(text));
   }
 
   return outputs;
@@ -288,19 +346,21 @@ async function attributeWithGemini(chunks: string[][]): Promise<ChunkAttribution
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: getAiModels().geminiModel,
-    generationConfig: { temperature: 0.2 },
+    generationConfig: { temperature: 0 },
   });
   const outputs: ChunkAttribution[] = [];
+  let roster: string[] = [];
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunkText = chunks[i].join("\n");
-    const prompt = buildAttributionPrompt(chunkText, i, chunks.length);
+    const prompt = buildAttributionPrompt(chunkText, i, chunks.length, roster);
     const result = await model.generateContent(prompt);
     const text = result.response.text().trim();
     if (!text) throw new Error("Gemini devolvió una respuesta vacía en atribución");
     const finishReason = (result.response.candidates?.[0] as { finishReason?: string } | undefined)
       ?.finishReason;
     outputs.push({ text, truncated: finishReason === "MAX_TOKENS" });
+    roster = accumulateSpeakerRoster(roster, parseAttributedLines(text));
   }
 
   return outputs;

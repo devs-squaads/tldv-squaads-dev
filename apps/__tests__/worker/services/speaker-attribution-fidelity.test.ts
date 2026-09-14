@@ -2,7 +2,10 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+  MAX_SPEAKERS,
+  accumulateSpeakerRoster,
   applyAttributionToChunk,
+  buildAttributionPrompt,
   chunkLineIndexes,
   chunkLines,
   isAttributionLossy,
@@ -84,6 +87,26 @@ describe("speakerAt (spec 016)", () => {
     expect(speakerAt(timeline, -10, 3)).toBeUndefined();
   });
 
+  it("NO adelanta el turno cuando el cambio está a menos de la tolerancia", () => {
+    // Regresión que detectó la revisión de frontera: con tolerancia 3 y Ana en 0 s, Luis en 2 s,
+    // el segmento de 0 s se atribuía a Luis.
+    const tight = [
+      { speaker: "Ana", start: 0, end: 2, text: "hola" },
+      { speaker: "Luis", start: 2, end: 6, text: "buenas" },
+    ];
+
+    expect(speakerAt(tight, 0)).toBe("Ana");
+    expect(speakerAt(tight, 1)).toBe("Ana");
+    expect(speakerAt(tight, 2)).toBe("Luis");
+  });
+
+  it("aplica la tolerancia sólo cuando nada ha empezado todavía", () => {
+    const later = [{ speaker: "Ana", start: 10, end: 20, text: "hola" }];
+
+    expect(speakerAt(later, 8, 3)).toBe("Ana");
+    expect(speakerAt(later, 6, 3)).toBeUndefined();
+  });
+
   it("devuelve undefined con una línea temporal vacía", () => {
     expect(speakerAt([], 5)).toBeUndefined();
   });
@@ -146,5 +169,47 @@ describe("applyAttributionToChunk (spec 016)", () => {
     ]);
 
     expect(result.map((s) => s.speaker)).toEqual(["Ana", "Ana", "Luis"]);
+  });
+});
+
+describe("censo de hablantes entre fragmentos (spec 016)", () => {
+  const line = (speaker: string) => ({ speaker, start: 0, end: 1, text: "x" });
+
+  it("acumula etiquetas nuevas en orden de aparición", () => {
+    const roster = accumulateSpeakerRoster([], [line("Ana"), line("Luis"), line("Ana")]);
+
+    expect(roster).toEqual(["Ana", "Luis"]);
+  });
+
+  it("no duplica una etiqueta ya conocida", () => {
+    const roster = accumulateSpeakerRoster(["Ana"], [line("Ana"), line("Luis")]);
+
+    expect(roster).toEqual(["Ana", "Luis"]);
+  });
+
+  it("respeta el máximo de hablantes del prompt", () => {
+    const many = Array.from({ length: 10 }, (_, i) => line(`P${i}`));
+    const roster = accumulateSpeakerRoster(["A", "B", "C", "D", "E"], many);
+
+    expect(roster).toHaveLength(MAX_SPEAKERS);
+  });
+
+  it("conserva el censo previo si el chunk no aporta etiquetas nuevas", () => {
+    const roster = accumulateSpeakerRoster(["Ana", "Luis"], []);
+
+    expect(roster).toEqual(["Ana", "Luis"]);
+  });
+
+  it("el prompt incluye el censo cuando se le pasa", () => {
+    const prompt = buildAttributionPrompt("[00:00] hola", 1, 3, ["Ana", "Luis"]);
+
+    expect(prompt).toContain("HABLANTES YA IDENTIFICADOS");
+    expect(prompt).toContain("Ana, Luis");
+  });
+
+  it("el prompt no menciona censo cuando no hay hablantes conocidos", () => {
+    const prompt = buildAttributionPrompt("[00:00] hola", 0, 3);
+
+    expect(prompt).not.toContain("HABLANTES YA IDENTIFICADOS");
   });
 });
