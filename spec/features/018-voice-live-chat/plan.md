@@ -39,7 +39,7 @@ exacto que necesitará la 019.
 | Audio de entrada (conversación) | ⚠️ **`{ clientContent: { turns: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/pcm;rate=16000", data } }] }] } }`**. `realtimeInput.audio` y `realtimeInput.mediaChunks` **se ignoran en silencio** en `gemini-3.8-live` (verificado con voz real: sin error, sin transcripción, sin respuesta) |
 | Cierre de turno | `{ clientContent: { turnComplete: true } }` — el cliente decide cuándo terminó de hablar el usuario |
 | Transcripción del usuario | ⚠️ `inputAudioTranscription` se acepta en el setup pero **no emite eventos** en `gemini-3.8-live` (verificado, también con `languageCodes`). Se obtiene con un **segundo socket** `gemini-3.5-transcribe-live` (`responseModalities: ["TEXT"]`, `inputAudioTranscription: { languageCodes: [] }`) que sí consume `realtimeInput.audio` y emite `serverContent.inputTranscription.text` en vivo |
-| Audio de entrada (transcripción) | `{ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=16000" } } }` (funciona también `mediaChunks`); cerrar con `{ realtimeInput: { audioStreamEnd: true } }`. Este modelo **no** emite `turnComplete`: no hay que esperarlo |
+| Audio de entrada (transcripción) | `{ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=16000" } } }` (funciona también `mediaChunks`); cerrar con `{ realtimeInput: { audioStreamEnd: true } }`. Este modelo **no** emite `turnComplete`: no hay que esperarlo. Verificado que **el mismo socket sirve para varios turnos** (dos turnos consecutivos transcritos en una sola sesión), así que no hace falta re-mintear token por turno |
 | Texto de entrada | `{ realtimeInput: { text } }` |
 | Eventos del servidor | `setupComplete`, `serverContent{ modelTurn.parts[].inlineData.data (PCM 24 kHz base64), inputTranscription.text, outputTranscription.text, interrupted, turnComplete, generationComplete, usageMetadata }`, `toolCall.functionCalls[]`, `toolCallCancellation`, `sessionResumptionUpdate{ resumable, newHandle }`, `goAway{ timeLeft }`. Se reciben además **mensajes vacíos `{}`** que hay que ignorar sin error |
 | Respuesta de tool | `{ toolResponse: { functionResponses: [{ id, name, response }] } }` — verificado: el ciclo `toolCall → toolResponse → audio + transcripción` cierra |
@@ -86,7 +86,8 @@ exacto que necesitará la 019.
 9. **Cliente** — `apps/web/src/components/chat/useVoiceSession.ts` (getUserMedia, AudioWorklet,
    WebSocket, playback, reconexión) + `apps/web/public/worklets/pcm-capture.js` y `pcm-playback.js`
    + botón y estado en `ChatInput.tsx` / `ChatWidget.tsx`. La sesión de voz entrega los turnos
-   cerrados al historial por el endpoint **ya existente** `/api/chat/history`.
+   cerrados al historial por la vía normal del chat: `appendMessages` de `useChatStream` (mismo estado
+   que persiste el autosave, así el guardado del texto no pisa los turnos hablados).
 10. **Env y docs** — `README.md` (tabla de variables) y `.env.development.example` /
     `.env.production.example`: `VOICE_CHAT_ENABLED`, `GEMINI_LIVE_MODEL`, `VOICE_CHAT_MAX_SESSION_MINUTES`.
 11. **Tests** — `apps/__tests__/web/modules/chat/voice/*.test.ts` (política, constraints, eventos, PCM,

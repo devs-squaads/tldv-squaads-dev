@@ -58,6 +58,7 @@ El primer intento fijó `realtimeInput.audio` para la conversación: en `gemini-
 - [x] Persistencia de los turnos cerrados: cambio **aditivo** `appendMessages` en `useChatStream` — los turnos entran al mismo estado que persiste el autosave, así el historial de texto y el de voz no se pisan. Se eliminó la escritura propia contra `/api/chat/history`.
 - [ ] Validación manual registrada: permiso concedido, permiso denegado, barge-in, corte de reconexión, tope de duración alcanzado.
   - **PENDIENTE**: sin navegador ni micrófono en este entorno. La implementación está completa; queda ejecutar la prueba manual (navegador real, AudioWorklet, permiso denegado, barge-in, reconexión y tope). El revisor ya validó el protocolo de audio con voz real contra la API.
+  - **Verificado por el revisor (2026-09-16)**: dos sockets en paralelo con tokens efímeros restringidos y `setup: {}` → la voz del usuario sale por el socket STT (`"¿Cuántas reuniones completadas tengo en el sistema?"`), el asistente llama a `search_meetings`, recibe la respuesta con la forma del puente y contesta por voz (`"Hay cuatro reuniones completadas en el sistema."`, ~136 KB de audio). Además: el **mismo socket STT sirve para varios turnos** (dos turnos consecutivos transcritos correctamente), así que no hay que re-mintear token por turno. Lo que queda pendiente es solo lo que depende del navegador (permisos, AudioWorklet, barge-in, reconexión a los ~10 min).
 
 ## Fase 4 · Cierre
 
