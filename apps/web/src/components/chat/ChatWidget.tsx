@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Bot, X } from "lucide-react";
 import { SquaadsLogo } from "@/components/SquaadsLogo";
 import { ChatMessages } from "@/components/chat/ChatMessages";
@@ -8,7 +8,19 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatSuggestions } from "@/components/chat/ChatSuggestion";
 import { useChatStream, getToolLabel } from "@/components/chat/useChatStream";
 import { hasSupportTopicMarker } from "@/components/chat/chatWidget.logic";
+import { useVoiceSession } from "@/components/chat/useVoiceSession";
+import {
+  buildVoiceDisplayMessages,
+  voiceStatusLabel,
+} from "@/components/chat/voiceWidget.logic";
 import { ReportBugButton } from "@/components/bug-report/ReportBugButton";
+
+interface VoiceConfig {
+  enabled: boolean;
+  maxSessionMinutes: number;
+}
+
+const DEFAULT_VOICE_CONFIG: VoiceConfig = { enabled: false, maxSessionMinutes: 15 };
 
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
@@ -17,7 +29,26 @@ export function ChatWidget() {
   const [manualReveal, setManualReveal] = useState(false);
   const { messages, suggestions, isLoading, error, activeToolCall, sendMessage, addQuickReply, reset } =
     useChatStream();
-  const showBugReport = hasSupportTopicMarker(messages) || manualReveal;
+  const [voiceConfig, setVoiceConfig] = useState<VoiceConfig>(DEFAULT_VOICE_CONFIG);
+  const [voiceConsentOpen, setVoiceConsentOpen] = useState(false);
+  const [voiceConsented, setVoiceConsented] = useState(false);
+  const voice = useVoiceSession({
+    history: messages,
+    maxSessionMinutes: voiceConfig.maxSessionMinutes,
+  });
+  const displayedMessages = useMemo(
+    () =>
+      buildVoiceDisplayMessages({
+        messages,
+        turns: voice.turns,
+        liveUserText: voice.liveUserText,
+        liveAssistantText: voice.liveAssistantText,
+      }),
+    [messages, voice.turns, voice.liveUserText, voice.liveAssistantText],
+  );
+  const showBugReport = hasSupportTopicMarker(displayedMessages) || manualReveal;
+  const voiceEnabled = voiceConfig.enabled;
+  const voiceStatusText = voice.error ?? voice.notice ?? voiceStatusLabel(voice.status, voice.activity);
   const normalizedError = error?.toLowerCase() ?? "";
   const isTokenError =
     /token|quota|rate limit|429|credit|crédito|l[ií]mite/.test(normalizedError);
@@ -46,6 +77,51 @@ export function ChatWidget() {
       document.body.style.overflow = "";
     };
   }, [open]);
+
+  // Config de voz: si la feature está apagada, el botón no se muestra.
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/chat/voice/config")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: unknown) => {
+        if (cancelled || typeof data !== "object" || data === null) return;
+        const record = data as Record<string, unknown>;
+        setVoiceConfig({
+          enabled: record.enabled === true,
+          maxSessionMinutes:
+            typeof record.maxSessionMinutes === "number"
+              ? record.maxSessionMinutes
+              : DEFAULT_VOICE_CONFIG.maxSessionMinutes,
+        });
+      })
+      .catch(() => {
+        // Sin config, la voz queda apagada.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function handleToggleVoice() {
+    if (voice.isActive) {
+      voice.stop();
+      return;
+    }
+    if (!voice.canStart) return;
+    if (!voiceConsented) {
+      setVoiceConsentOpen(true);
+      return;
+    }
+    void voice.start();
+  }
+
+  function handleConfirmVoice() {
+    setVoiceConsented(true);
+    setVoiceConsentOpen(false);
+    void voice.start();
+  }
 
   function handleClose() {
     setOpen(false);
@@ -164,7 +240,7 @@ export function ChatWidget() {
 
         {/* Messages area */}
         <div className="relative flex flex-1 flex-col min-h-0">
-          <ChatMessages messages={messages} onQuickReply={addQuickReply} />
+          <ChatMessages messages={displayedMessages} onQuickReply={addQuickReply} />
         </div>
 
         {showBugReport && (
@@ -221,6 +297,90 @@ export function ChatWidget() {
           )
         )}
 
+        {/* Voz: aviso de privacidad antes de pedir el micrófono */}
+        {voiceConsentOpen && (
+          <div
+            className="mx-4 mb-2 rounded-xl px-3 py-2.5 text-xs"
+            style={{
+              background: "rgba(0,242,255,0.08)",
+              border: "1px solid rgba(0,242,255,0.26)",
+            }}
+          >
+            <p className="text-[11px] font-semibold text-[var(--foreground)]">
+              Voz en tiempo real
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              Al activar el micrófono, tu voz se envía a Google (Gemini Live) para transcribir y
+              responder en vivo. No se almacena en Squaads.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={handleConfirmVoice}
+                className="rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all active:scale-95"
+                style={{ background: "#00F2FF", color: "#000" }}
+              >
+                Activar micrófono
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceConsentOpen(false)}
+                className="rounded-lg px-2.5 py-1 text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                style={{ border: "1px solid var(--glass-border)" }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Voz: estado de la sesión (escuchando / hablando / reconectando / tope) */}
+        {voiceEnabled && !voiceConsentOpen && (voice.isActive || voice.notice || voice.error) && (
+          <div
+            className="mx-4 mb-2 flex items-center gap-2 rounded-xl px-3 py-2 text-xs"
+            style={{
+              background:
+                voice.status === "error" ? "rgba(239,68,68,0.12)" : "rgba(0,242,255,0.08)",
+              border:
+                voice.status === "error"
+                  ? "1px solid rgba(239,68,68,0.24)"
+                  : "1px solid rgba(0,242,255,0.22)",
+            }}
+          >
+            <span
+              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{
+                background:
+                  voice.status === "error"
+                    ? "#fca5a5"
+                    : voice.status === "reconnecting"
+                      ? "#f59e0b"
+                      : "#00F2FF",
+                animation: voice.status === "active" ? "pulse 1.5s ease-in-out infinite" : "none",
+              }}
+            />
+            <span className="flex-1 leading-snug text-[var(--foreground)]">{voiceStatusText}</span>
+            {voice.isActive && (
+              <button
+                type="button"
+                onClick={() => voice.stop()}
+                className="shrink-0 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+              >
+                Detener
+              </button>
+            )}
+            {!voice.isActive && voice.notice && (
+              <button
+                type="button"
+                onClick={() => voice.clearNotice()}
+                className="shrink-0 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+              >
+                Cerrar
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Suggestions */}
         <ChatSuggestions
           suggestions={suggestions}
@@ -229,7 +389,14 @@ export function ChatWidget() {
 
         {/* Input */}
         <div className="shrink-0">
-          <ChatInput onSend={sendMessage} disabled={isLoading} />
+          <ChatInput
+            onSend={sendMessage}
+            disabled={isLoading}
+            voiceEnabled={voiceEnabled}
+            voiceActive={voice.isActive}
+            voiceBusy={voice.status === "requesting-token" || voice.status === "connecting" || voice.status === "reconnecting"}
+            onToggleVoice={handleToggleVoice}
+          />
         </div>
 
         {/* Reset conversation + manual report-a-problem escape hatch */}

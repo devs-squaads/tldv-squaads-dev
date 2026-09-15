@@ -1,14 +1,28 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Send } from "lucide-react";
+import { Send, Mic, MicOff } from "lucide-react";
 
 interface ChatInputProps {
   onSend: (text: string) => void;
   disabled?: boolean;
+  /** La feature de voz está encendida (VOICE_CHAT_ENABLED). */
+  voiceEnabled?: boolean;
+  /** Hay una sesión de voz en curso. */
+  voiceActive?: boolean;
+  /** Se está pidiendo token / conectando / reconectando. */
+  voiceBusy?: boolean;
+  onToggleVoice?: () => void;
 }
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  disabled,
+  voiceEnabled,
+  voiceActive,
+  voiceBusy,
+  onToggleVoice,
+}: ChatInputProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -50,7 +64,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         onChange={handleInput}
         onKeyDown={handleKeyDown}
         disabled={disabled}
-        placeholder="Escribí tu consulta..."
+        placeholder={voiceActive ? "Escuchando... podés hablar o escribir" : "Escribí tu consulta..."}
         rows={1}
         className="flex-1 resize-none rounded-xl px-3 py-2 text-sm leading-relaxed placeholder:text-[var(--muted-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00F2FF]/50 disabled:opacity-50 transition-all"
         style={{
@@ -63,6 +77,25 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           overflowY: "auto",
         }}
       />
+      {voiceEnabled && (
+        <button
+          type="button"
+          onClick={onToggleVoice}
+          disabled={voiceBusy}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-all disabled:opacity-50 active:scale-95"
+          style={{
+            background: voiceActive ? "#ef4444" : "var(--secondary)",
+            color: voiceActive ? "#fff" : "var(--muted-foreground)",
+            border: "1px solid var(--glass-border)",
+            boxShadow: voiceActive ? "0 0 12px rgba(239,68,68,0.35)" : "none",
+          }}
+          aria-label={voiceActive ? "Detener la voz" : "Hablar con el asistente"}
+          aria-pressed={Boolean(voiceActive)}
+          title={voiceActive ? "Detener la voz" : "Hablar con el asistente"}
+        >
+          {voiceActive ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+        </button>
+      )}
       <button
         type="button"
         onClick={handleSubmit}
