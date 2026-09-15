@@ -2,48 +2,13 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { Content, FunctionDeclaration } from "@google/generative-ai";
 import type { ChatMessage, ChatProvider, ChatStreamChunk } from "@/integrations/chat/ChatProvider";
 import type { ToolDefinition, ToolCallRequest } from "@/integrations/chat/tools/types";
+import { toGeminiSchema } from "@/integrations/chat/tools/geminiSchema";
 import {
   streamChatRuntime,
   type ChatRuntimeAdapter,
 } from "@/modules/chat/application/chatRuntimeCore";
 
 const MODEL = "gemini-3.1-flash-lite";
-
-const TYPE_MAP: Record<string, string> = {
-  string: "STRING",
-  number: "NUMBER",
-  boolean: "BOOLEAN",
-  array: "ARRAY",
-  object: "OBJECT",
-};
-
-function toGeminiType(type: string): string {
-  return TYPE_MAP[type] ?? "STRING";
-}
-
-function toGeminiSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {
-    type: toGeminiType(schema.type as string),
-  };
-
-  if (schema.description) result.description = schema.description;
-  if (schema.enum) result.enum = schema.enum;
-
-  if (schema.properties) {
-    const props = schema.properties as Record<string, Record<string, unknown>>;
-    result.properties = Object.fromEntries(
-      Object.entries(props).map(([key, value]) => [key, toGeminiSchema(value)]),
-    );
-  }
-
-  if (schema.required) result.required = schema.required;
-
-  if (schema.items) {
-    result.items = toGeminiSchema(schema.items as Record<string, unknown>);
-  }
-
-  return result;
-}
 
 function toGeminiFunctionDeclaration(tool: ToolDefinition): FunctionDeclaration {
   return {

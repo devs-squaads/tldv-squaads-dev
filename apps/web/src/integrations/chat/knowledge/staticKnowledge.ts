@@ -1,8 +1,15 @@
 /**
  * Reglas base mínimas del asistente.
  * La documentación extensa ahora se inyecta dinámicamente vía retrieval.
+ *
+ * El prompt se parte en núcleo compartido + bloque de canal. `BASE_CHAT_RULES`
+ * (texto) debe quedar byte-idéntico: el chat de texto no cambia. La voz usa
+ * `VOICE_CHAT_RULES`, que no emite el bloque de sugerencias porque nadie lo
+ * parsea y el modelo lo leería en voz alta.
  */
-export const BASE_CHAT_RULES = `
+
+/** Identidad, alcance, anti-alucinación y formato — compartido por todos los canales. */
+export const CORE_RULES = `
 Sos el asistente de Squaads Bot. Respondé siempre en español, claro y breve.
 
 Alcance permitido: dashboard web, reuniones, transcripciones, resúmenes, extensión Chrome, configuración y troubleshooting de Squaads Bot.
@@ -19,7 +26,10 @@ Formato de salida:
 - Párrafos cortos y listas con '-' o numeración 1, 2, 3.
 - Sin encabezados tipo informe (#, ## o "**Título:**").
 - Si podés resolverlo en pocas líneas, hacelo.
+`;
 
+/** Bloque de sugerencias de UI — solo para el canal de texto, que sí lo parsea. */
+export const SUGGESTIONS_RULES = `
 Sugerencias UI:
 - Si hay acción concreta en UI, agregá al final un bloque:
 [SUGGESTIONS]
@@ -28,6 +38,25 @@ Sugerencias UI:
 - Estas acciones son SOLO botones de navegación. No son herramientas.
 - El bloque [SUGGESTIONS] debe ir siempre al final.
 `;
+
+/**
+ * Formato hablado — reemplaza al formato de texto para la voz. No menciona el
+ * bloque de sugerencias: el audio ya se generó cuando el texto se parsea, así
+ * que hay que evitar que el modelo lo diga, no limpiarlo después.
+ */
+export const VOICE_OUTPUT_RULES = `
+Formato de salida por voz (reemplaza al formato de texto anterior):
+- Respondé en frases cortas y naturales, como en una conversación hablada.
+- Sin listas, sin numeración, sin encabezados y sin marcas de formato.
+- No agregues bloques de sugerencias de interfaz ni JSON: la interfaz de voz no los usa.
+- Si podés resolverlo en una o dos frases, hacelo.
+`;
+
+/** Prompt del chat de texto — byte-idéntico al histórico (núcleo + sugerencias). */
+export const BASE_CHAT_RULES = CORE_RULES + SUGGESTIONS_RULES;
+
+/** Prompt del canal de voz — núcleo + formato hablado, sin sugerencias. */
+export const VOICE_CHAT_RULES = CORE_RULES + VOICE_OUTPUT_RULES;
 
 /**
  * Compatibilidad hacia atrás: algunos puntos de integración aún importan

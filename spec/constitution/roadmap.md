@@ -101,6 +101,19 @@ _Lo próximo a abordar._
     `tasks.md` marcado): cargar el ZIP interno real en entornos compartidos, validar el flujo end-to-end
     fuera de local y sustituir hosts locales por dominio real. →
     [`features/001-extension-rollout/`](../features/001-extension-rollout/spec.md)
+18. **018 · Voz en tiempo real en el chat (Gemini Live)** — implementada en rama `feat/018-voice-live-chat`
+    (98 tests de la feature; `bun run test` 715 pass / 0 fail). Protocolo verificado contra la API real por
+    el revisor, incluidos los dos puntos donde la documentación de Google no coincide con la API: el audio
+    de conversación va por `clientContent` (no por `realtimeInput`, que se ignora en silencio) y la
+    transcripción de la voz del usuario sale de un segundo socket con `gemini-3.5-transcribe-live`. Apagada
+    por defecto (`VOICE_CHAT_ENABLED=false`). **Pendiente**: validación manual en navegador (permisos,
+    AudioWorklet, barge-in, reconexión a los ~10 min) y PR a `dev`. →
+    [`features/018-voice-live-chat/`](../features/018-voice-live-chat/spec.md)
+19. **019 · Transcripción en vivo de la reunión** (siguiente, sin spec todavía) — reutilizar el transporte
+    ya probado de la 018 para transcribir la reunión en curso con `gemini-3.5-transcribe-live`, capturando
+    en paralelo `SpeakerOutput.monitor` (el worker ya captura de ahí con `-f pulse`), con los términos del
+    diccionario como vocabulario y sin tocar el pipeline batch. Aditivo: el transcript definitivo con
+    hablantes sigue saliendo del pipeline actual. Coste ~$0.009/min.
 
 ## Seguridad — pendientes conocidos ⚠️
 

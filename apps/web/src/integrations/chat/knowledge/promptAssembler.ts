@@ -1,11 +1,17 @@
 import { requiresDataTool } from "@/integrations/chat/tools/suggestionValidator";
-import { BASE_CHAT_RULES } from "@/integrations/chat/knowledge/staticKnowledge";
+import {
+  BASE_CHAT_RULES,
+  VOICE_CHAT_RULES,
+} from "@/integrations/chat/knowledge/staticKnowledge";
 import {
   retrieveKnowledgeSnippets,
   type RetrievedSnippet,
 } from "@/integrations/chat/knowledge/documentRetrieval";
 
 const DEFAULT_SNIPPET_COUNT = 4;
+
+/** Canal de salida: el texto parsea sugerencias de UI, la voz no puede emitirlas. */
+export type ChatChannel = "text" | "voice";
 
 export interface PromptAssembly {
   systemContent: string;
@@ -32,6 +38,7 @@ export function assembleChatSystemPrompt(input: {
   messages: Array<{ role: string; content: string }>;
   userContext: string;
   topK?: number;
+  channel?: ChatChannel;
 }): PromptAssembly {
   const latestUserMessage = getLatestUserMessage(input.messages);
   const operational = requiresDataTool(latestUserMessage);
@@ -40,8 +47,10 @@ export function assembleChatSystemPrompt(input: {
     ? []
     : retrieveKnowledgeSnippets(latestUserMessage, { topK: input.topK ?? DEFAULT_SNIPPET_COUNT });
 
+  const baseRules = input.channel === "voice" ? VOICE_CHAT_RULES : BASE_CHAT_RULES;
+
   const sections = [
-    BASE_CHAT_RULES.trim(),
+    baseRules.trim(),
     "Política de fuentes de verdad: datos operativos de reuniones y transcripciones reales deben salir de herramientas; la documentación recuperada es soporte explicativo.",
     formatSnippetBlock(snippets),
     input.userContext.trim(),
