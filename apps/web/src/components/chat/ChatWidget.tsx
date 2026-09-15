@@ -27,28 +27,38 @@ export function ChatWidget() {
   // Manual escape hatch: covers a restored conversation whose history never
   // reached Soporte — reveals the button without losing history or needing the backend.
   const [manualReveal, setManualReveal] = useState(false);
-  const { messages, suggestions, isLoading, error, activeToolCall, sendMessage, addQuickReply, reset } =
-    useChatStream();
+  const {
+    messages,
+    suggestions,
+    isLoading,
+    error,
+    activeToolCall,
+    sendMessage,
+    addQuickReply,
+    appendMessages,
+    reset,
+  } = useChatStream();
   const [voiceConfig, setVoiceConfig] = useState<VoiceConfig>(DEFAULT_VOICE_CONFIG);
   const [voiceConsentOpen, setVoiceConsentOpen] = useState(false);
   const [voiceConsented, setVoiceConsented] = useState(false);
   const voice = useVoiceSession({
-    history: messages,
     maxSessionMinutes: voiceConfig.maxSessionMinutes,
+    onTurnsCommitted: appendMessages,
   });
   const displayedMessages = useMemo(
     () =>
       buildVoiceDisplayMessages({
         messages,
-        turns: voice.turns,
         liveUserText: voice.liveUserText,
         liveAssistantText: voice.liveAssistantText,
       }),
-    [messages, voice.turns, voice.liveUserText, voice.liveAssistantText],
+    [messages, voice.liveUserText, voice.liveAssistantText],
   );
   const showBugReport = hasSupportTopicMarker(displayedMessages) || manualReveal;
   const voiceEnabled = voiceConfig.enabled;
-  const voiceStatusText = voice.error ?? voice.notice ?? voiceStatusLabel(voice.status, voice.activity);
+  const voiceStatusText = voice.isRecording
+    ? "Grabando tu voz... clickeá el micrófono para terminar el turno"
+    : voice.error ?? voice.notice ?? voiceStatusLabel(voice.status, voice.activity);
   const normalizedError = error?.toLowerCase() ?? "";
   const isTokenError =
     /token|quota|rate limit|429|credit|crédito|l[ií]mite/.test(normalizedError);
@@ -105,8 +115,12 @@ export function ChatWidget() {
   }, []);
 
   function handleToggleVoice() {
+    // Con la sesión activa el botón es push-to-talk por click: inicia/termina el turno.
     if (voice.isActive) {
-      voice.stop();
+      if (voice.status === "active") {
+        if (voice.isRecording) voice.endTurn();
+        else voice.startTurn();
+      }
       return;
     }
     if (!voice.canStart) return;
@@ -350,13 +364,15 @@ export function ChatWidget() {
             <span
               className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
               style={{
-                background:
-                  voice.status === "error"
+                background: voice.isRecording
+                  ? "#ef4444"
+                  : voice.status === "error"
                     ? "#fca5a5"
                     : voice.status === "reconnecting"
                       ? "#f59e0b"
                       : "#00F2FF",
-                animation: voice.status === "active" ? "pulse 1.5s ease-in-out infinite" : "none",
+                animation:
+                  voice.status === "active" ? "pulse 1.5s ease-in-out infinite" : "none",
               }}
             />
             <span className="flex-1 leading-snug text-[var(--foreground)]">{voiceStatusText}</span>
@@ -394,6 +410,7 @@ export function ChatWidget() {
             disabled={isLoading}
             voiceEnabled={voiceEnabled}
             voiceActive={voice.isActive}
+            voiceRecording={voice.isRecording}
             voiceBusy={voice.status === "requesting-token" || voice.status === "connecting" || voice.status === "reconnecting"}
             onToggleVoice={handleToggleVoice}
           />

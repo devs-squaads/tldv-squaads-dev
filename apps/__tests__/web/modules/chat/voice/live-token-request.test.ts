@@ -31,13 +31,18 @@ const READ_ONLY_SAMPLE: ToolDefinition[] = [
   },
 ];
 
-describe("buildLiveConnectConstraints", () => {
+function conversationSetup(model = "gemini-3.8-live") {
+  return buildLiveConnectConstraints({
+    purpose: "conversation",
+    model,
+    systemInstruction: "Sos el asistente de Squaads.",
+    tools: READ_ONLY_SAMPLE,
+  });
+}
+
+describe("buildLiveConnectConstraints · conversación", () => {
   it("arma el campo verificado bidiGenerateContentSetup con AUDIO, instrucción y tools", () => {
-    const setup = buildLiveConnectConstraints({
-      model: "gemini-3.8-live",
-      systemInstruction: "Sos el asistente de Squaads.",
-      tools: READ_ONLY_SAMPLE,
-    });
+    const setup = conversationSetup();
 
     expect(setup.model).toBe("models/gemini-3.8-live");
     expect(setup.generationConfig).toEqual({ responseModalities: ["AUDIO"] });
@@ -48,12 +53,19 @@ describe("buildLiveConnectConstraints", () => {
     expect(setup.tools?.[0]?.functionDeclarations[0]?.name).toBe("search_meetings");
   });
 
-  it("marca cada functionDeclaration como BLOCKING para que el turno espere el resultado", () => {
+  it("es el default cuando no se pasa purpose", () => {
     const setup = buildLiveConnectConstraints({
       model: "gemini-3.8-live",
       systemInstruction: "prompt",
       tools: READ_ONLY_SAMPLE,
     });
+
+    expect(setup.generationConfig.responseModalities).toEqual(["AUDIO"]);
+    expect(setup.tools).toHaveLength(1);
+  });
+
+  it("marca cada functionDeclaration como BLOCKING para que el turno espere el resultado", () => {
+    const setup = conversationSetup();
 
     for (const declaration of setup.tools?.[0]?.functionDeclarations ?? []) {
       expect(declaration.behavior).toBe("BLOCKING");
@@ -61,11 +73,7 @@ describe("buildLiveConnectConstraints", () => {
   });
 
   it("convierte los esquemas JSON a tipos Gemini sin simplificarlos", () => {
-    const setup = buildLiveConnectConstraints({
-      model: "gemini-3.8-live",
-      systemInstruction: "prompt",
-      tools: READ_ONLY_SAMPLE,
-    });
+    const setup = conversationSetup();
 
     const parameters = setup.tools?.[0]?.functionDeclarations[0]?.parameters as {
       type: string;
@@ -86,18 +94,24 @@ describe("buildLiveConnectConstraints", () => {
     expect(parameters.required).toEqual(["status"]);
   });
 
+  it("NO fija sessionResumption ni contextWindowCompression: los aporta el cliente en su setup", () => {
+    const setup = conversationSetup();
+
+    expect(setup).not.toHaveProperty("sessionResumption");
+    expect(setup).not.toHaveProperty("contextWindowCompression");
+    expect(setup).not.toHaveProperty("inputAudioTranscription");
+    expect(setup).not.toHaveProperty("outputAudioTranscription");
+  });
+
   it("no duplica el prefijo models/ si el modelo ya lo trae", () => {
-    const setup = buildLiveConnectConstraints({
-      model: "models/gemini-3.8-live",
-      systemInstruction: "prompt",
-      tools: [],
-    });
+    const setup = conversationSetup("models/gemini-3.8-live");
 
     expect(setup.model).toBe("models/gemini-3.8-live");
   });
 
   it("omite tools cuando no hay declaraciones", () => {
     const setup = buildLiveConnectConstraints({
+      purpose: "conversation",
       model: "gemini-3.8-live",
       systemInstruction: "prompt",
       tools: [],
@@ -107,13 +121,38 @@ describe("buildLiveConnectConstraints", () => {
   });
 });
 
-describe("buildAuthTokenRequestBody", () => {
-  it("usa uses: 1 y el campo verificado bidiGenerateContentSetup", () => {
+describe("buildLiveConnectConstraints · transcripción", () => {
+  it("mintea el modelo de transcripción sin systemInstruction ni tools", () => {
     const setup = buildLiveConnectConstraints({
-      model: "gemini-3.8-live",
-      systemInstruction: "prompt",
+      purpose: "transcription",
+      model: "gemini-3.5-transcribe-live",
+    });
+
+    expect(setup.model).toBe("models/gemini-3.5-transcribe-live");
+    expect(setup.generationConfig).toEqual({ responseModalities: ["TEXT"] });
+    expect(setup.inputAudioTranscription).toEqual({ languageCodes: [] });
+    expect(setup.systemInstruction).toBeUndefined();
+    expect(setup.tools).toBeUndefined();
+    expect(setup).not.toHaveProperty("sessionResumption");
+    expect(setup).not.toHaveProperty("contextWindowCompression");
+  });
+
+  it("ignora instrucción y tools si igual se pasan en propósito transcripción", () => {
+    const setup = buildLiveConnectConstraints({
+      purpose: "transcription",
+      model: "gemini-3.5-transcribe-live",
+      systemInstruction: "no debería viajar",
       tools: READ_ONLY_SAMPLE,
     });
+
+    expect(setup.systemInstruction).toBeUndefined();
+    expect(setup.tools).toBeUndefined();
+  });
+});
+
+describe("buildAuthTokenRequestBody", () => {
+  it("usa uses: 1 y el campo verificado bidiGenerateContentSetup", () => {
+    const setup = conversationSetup();
 
     const now = new Date("2026-09-15T12:00:00.000Z");
     const body = buildAuthTokenRequestBody({ setup, now });

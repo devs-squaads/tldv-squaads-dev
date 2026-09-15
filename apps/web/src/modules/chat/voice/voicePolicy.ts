@@ -7,6 +7,8 @@
  */
 
 export const VOICE_CHAT_DEFAULT_MODEL = "gemini-3.8-live";
+/** `gemini-3.8-live` no entrega `inputTranscription`: la voz del usuario se transcribe aparte. */
+export const VOICE_CHAT_DEFAULT_TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live";
 export const VOICE_CHAT_DEFAULT_MAX_SESSION_MINUTES = 15;
 
 /**
@@ -24,6 +26,7 @@ export interface VoiceRateLimitPolicy {
 export interface VoiceChatPolicy {
   enabled: boolean;
   model: string;
+  transcribeModel: string;
   maxSessionMinutes: number;
   rateLimit: VoiceRateLimitPolicy;
   /** Explicación legible de por qué quedó así (para logs y diagnóstico). */
@@ -44,6 +47,12 @@ export function resolveVoicePolicy(env: VoiceEnv = process.env): VoiceChatPolicy
 
   const rawModel = env.GEMINI_LIVE_MODEL?.trim();
   const model = rawModel && rawModel.length > 0 ? rawModel : VOICE_CHAT_DEFAULT_MODEL;
+
+  const rawTranscribeModel = env.GEMINI_LIVE_TRANSCRIBE_MODEL?.trim();
+  const transcribeModel =
+    rawTranscribeModel && rawTranscribeModel.length > 0
+      ? rawTranscribeModel
+      : VOICE_CHAT_DEFAULT_TRANSCRIBE_MODEL;
 
   const rawMaxSessionMinutes = env.VOICE_CHAT_MAX_SESSION_MINUTES?.trim();
   const parsedMaxSessionMinutes = parsePositiveInteger(rawMaxSessionMinutes);
@@ -70,6 +79,7 @@ export function resolveVoicePolicy(env: VoiceEnv = process.env): VoiceChatPolicy
   return {
     enabled,
     model,
+    transcribeModel,
     maxSessionMinutes,
     rateLimit: {
       limit: VOICE_CHAT_TOKEN_RATE_LIMIT,

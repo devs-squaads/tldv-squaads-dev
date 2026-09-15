@@ -39,9 +39,21 @@ describe("normalizeLiveServerMessage", () => {
     expect(normalizeLiveServerMessage({ serverContent: { interrupted: true } })).toEqual([
       { type: "interrupted" },
     ]);
-    expect(normalizeLiveServerMessage({ serverContent: { interrupted: false } })).toEqual([
-      { type: "unknown" },
-    ]);
+    expect(normalizeLiveServerMessage({ serverContent: { interrupted: false } })).toEqual([]);
+  });
+
+  it("ignora mensajes vacíos {} (verificado: llegan ~14 por turno)", () => {
+    expect(normalizeLiveServerMessage({})).toEqual([]);
+    expect(normalizeLiveServerMessage("{}")).toEqual([]);
+  });
+
+  it("reconoce generationComplete y usageMetadata sin romper ni emitir eventos", () => {
+    expect(
+      normalizeLiveServerMessage({
+        serverContent: { generationComplete: true, usageMetadata: { totalTokenCount: 12 } },
+      }),
+    ).toEqual([]);
+    expect(normalizeLiveServerMessage({ usageMetadata: { totalTokenCount: 12 } })).toEqual([]);
   });
 
   it("normaliza turnComplete", () => {
@@ -126,8 +138,8 @@ describe("normalizeLiveServerMessage", () => {
       42,
       "no-es-json",
       [],
-      {},
       { serverContent: "no-es-objeto" },
+      { cualquierCosa: true },
     ];
 
     for (const input of invalidInputs) {

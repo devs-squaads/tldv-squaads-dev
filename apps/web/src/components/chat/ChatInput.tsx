@@ -10,6 +10,8 @@ interface ChatInputProps {
   voiceEnabled?: boolean;
   /** Hay una sesión de voz en curso. */
   voiceActive?: boolean;
+  /** El usuario está grabando su turno (push-to-talk). */
+  voiceRecording?: boolean;
   /** Se está pidiendo token / conectando / reconectando. */
   voiceBusy?: boolean;
   onToggleVoice?: () => void;
@@ -20,6 +22,7 @@ export function ChatInput({
   disabled,
   voiceEnabled,
   voiceActive,
+  voiceRecording,
   voiceBusy,
   onToggleVoice,
 }: ChatInputProps) {
@@ -84,16 +87,44 @@ export function ChatInput({
           disabled={voiceBusy}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-all disabled:opacity-50 active:scale-95"
           style={{
-            background: voiceActive ? "#ef4444" : "var(--secondary)",
-            color: voiceActive ? "#fff" : "var(--muted-foreground)",
-            border: "1px solid var(--glass-border)",
-            boxShadow: voiceActive ? "0 0 12px rgba(239,68,68,0.35)" : "none",
+            background: voiceRecording
+              ? "#ef4444"
+              : voiceActive
+                ? "rgba(0,242,255,0.14)"
+                : "var(--secondary)",
+            color: voiceRecording
+              ? "#fff"
+              : voiceActive
+                ? "#00F2FF"
+                : "var(--muted-foreground)",
+            border: voiceRecording
+              ? "1px solid rgba(239,68,68,0.5)"
+              : voiceActive
+                ? "1px solid rgba(0,242,255,0.4)"
+                : "1px solid var(--glass-border)",
+            boxShadow: voiceRecording
+              ? "0 0 12px rgba(239,68,68,0.45)"
+              : voiceActive
+                ? "0 0 12px rgba(0,242,255,0.18)"
+                : "none",
           }}
-          aria-label={voiceActive ? "Detener la voz" : "Hablar con el asistente"}
+          aria-label={
+            voiceRecording
+              ? "Terminar el turno de voz"
+              : voiceActive
+                ? "Empezar a hablar"
+                : "Hablar con el asistente"
+          }
           aria-pressed={Boolean(voiceActive)}
-          title={voiceActive ? "Detener la voz" : "Hablar con el asistente"}
+          title={
+            voiceRecording
+              ? "Terminar el turno de voz"
+              : voiceActive
+                ? "Empezar a hablar"
+                : "Hablar con el asistente"
+          }
         >
-          {voiceActive ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          {voiceRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
         </button>
       )}
       <button

@@ -35,10 +35,9 @@ describe("mergeTranscriptText", () => {
 describe("buildVoiceDisplayMessages", () => {
   const base: DisplayMessage[] = [{ role: "assistant", content: "hola" }];
 
-  it("deja los mensajes de texto intactos sin voz", () => {
+  it("deja los mensajes intactos sin transcripciones en vivo", () => {
     const result = buildVoiceDisplayMessages({
       messages: base,
-      turns: [],
       liveUserText: "",
       liveAssistantText: "",
     });
@@ -46,10 +45,10 @@ describe("buildVoiceDisplayMessages", () => {
     expect(result).toBe(base);
   });
 
-  it("añade los turnos cerrados y las transcripciones en vivo", () => {
+  it("añade las transcripciones en vivo al final (los turnos cerrados ya están en messages)", () => {
     const result = buildVoiceDisplayMessages({
-      messages: base,
-      turns: [
+      messages: [
+        ...base,
         { role: "user", content: "¿Qué se decidió?" },
         { role: "assistant", content: "Se aprobó el presupuesto." },
       ],
@@ -69,7 +68,6 @@ describe("buildVoiceDisplayMessages", () => {
   it("ignora transcripciones en vivo vacías", () => {
     const result = buildVoiceDisplayMessages({
       messages: base,
-      turns: [],
       liveUserText: "   ",
       liveAssistantText: "",
     });

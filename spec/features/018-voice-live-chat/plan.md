@@ -18,6 +18,12 @@ un flujo que es, por definición, sensible a latencia.
 Toda la variación de proveedor vive detrás de un módulo de política y un constructor de payload
 puros; el resto es transporte.
 
+**Dos sockets con dos modelos.** La conversación la lleva `gemini-3.8-live`; la transcripción en vivo
+de la voz del usuario la lleva `gemini-3.5-transcribe-live`, porque `gemini-3.8-live` **no** entrega
+la transcripción de entrada (verificado). Ambos se autentican con el mismo mecanismo de token
+efímero restringido: el servidor mintea uno por socket con la config fijada. Es también el transporte
+exacto que necesitará la 019.
+
 ## Protocolo verificado contra la API real (2026-09-15)
 
 > No es de memoria ni de la documentación: se ejecutó contra `generativelanguage.googleapis.com` con
@@ -30,14 +36,17 @@ puros; el resto es transporte.
 | Contenido restringido | `{ model: "models/gemini-3.8-live", generationConfig: { responseModalities: ["AUDIO"] }, systemInstruction: { parts: [{ text }] }, tools: [{ functionDeclarations: [...] }] }` |
 | WebSocket | `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=<name completo auth_tokens/…>` |
 | Primer mensaje | `{ setup: {} }` — **vacío**. La config viene del token. Enviar cualquier otra cosa antes cierra con `1007 setup must be the first message and only the first` |
-| Audio de entrada | `{ realtimeInput: { audio: { data: <base64 PCM16>, mimeType: "audio/pcm;rate=16000" } } }` |
+| Audio de entrada (conversación) | ⚠️ **`{ clientContent: { turns: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/pcm;rate=16000", data } }] }] } }`**. `realtimeInput.audio` y `realtimeInput.mediaChunks` **se ignoran en silencio** en `gemini-3.8-live` (verificado con voz real: sin error, sin transcripción, sin respuesta) |
+| Cierre de turno | `{ clientContent: { turnComplete: true } }` — el cliente decide cuándo terminó de hablar el usuario |
+| Transcripción del usuario | ⚠️ `inputAudioTranscription` se acepta en el setup pero **no emite eventos** en `gemini-3.8-live` (verificado, también con `languageCodes`). Se obtiene con un **segundo socket** `gemini-3.5-transcribe-live` (`responseModalities: ["TEXT"]`, `inputAudioTranscription: { languageCodes: [] }`) que sí consume `realtimeInput.audio` y emite `serverContent.inputTranscription.text` en vivo |
+| Audio de entrada (transcripción) | `{ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=16000" } } }` (funciona también `mediaChunks`); cerrar con `{ realtimeInput: { audioStreamEnd: true } }`. Este modelo **no** emite `turnComplete`: no hay que esperarlo |
 | Texto de entrada | `{ realtimeInput: { text } }` |
-| Eventos del servidor | `setupComplete`, `serverContent{ modelTurn.parts[].inlineData.data (PCM 24 kHz base64), inputTranscription.text, outputTranscription.text, interrupted, turnComplete }`, `toolCall.functionCalls[]`, `toolCallCancellation`, `sessionResumptionUpdate{ resumable, newHandle }`, `goAway{ timeLeft }` |
+| Eventos del servidor | `setupComplete`, `serverContent{ modelTurn.parts[].inlineData.data (PCM 24 kHz base64), inputTranscription.text, outputTranscription.text, interrupted, turnComplete, generationComplete, usageMetadata }`, `toolCall.functionCalls[]`, `toolCallCancellation`, `sessionResumptionUpdate{ resumable, newHandle }`, `goAway{ timeLeft }`. Se reciben además **mensajes vacíos `{}`** que hay que ignorar sin error |
 | Respuesta de tool | `{ toolResponse: { functionResponses: [{ id, name, response }] } }` — verificado: el ciclo `toolCall → toolResponse → audio + transcripción` cierra |
 | Modo de tool | Con el default **`NON_BLOCKING`** el turno hace `turnComplete` **antes** de que llegue el resultado y el asistente no llega a contestar. Con `behavior: "BLOCKING"` en la declaración, el modelo espera y responde en el mismo turno → **se usa `BLOCKING`** |
 | ⚠️ Prompt hablado | Con las reglas del chat de texto, el modelo **lee en voz alta** el bloque `[SUGGESTIONS]` (verificado en una prueba real). En voz hay que usar reglas sin ese protocolo: `VOICE_CHAT_RULES` |
 | Vida del token | **1 token = 1 conexión.** Reusarlo cierra con `1011 Token has been used too many times` |
-| Reconexión larga | Mintear **token nuevo** y abrir con `{ setup: { sessionResumption: { handle } } }` → verificado `setupComplete`. No poner `sessionResumption` en las restricciones del token, para que el cliente pueda mandar el handle |
+| Reconexión larga | Mintear **token nuevo** y abrir con `{ setup: { sessionResumption: { handle }, contextWindowCompression: { slidingWindow: {} } } }` → verificado `setupComplete`. **No** poner `sessionResumption` ni `contextWindowCompression` en las restricciones del token: el servidor habilita la resumption por defecto (manda el handle igual) y esos campos los aporta el cliente en su `setup` |
 | Límites de sesión | audio-only 15 min y conexión ~10 min; se gestionan con el tope de duración + reconexión con handle |
 
 ## Implementación

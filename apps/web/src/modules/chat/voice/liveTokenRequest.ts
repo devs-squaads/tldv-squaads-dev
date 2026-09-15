@@ -8,11 +8,19 @@
  *  - el modelo va como `models/<modelo>`;
  *  - cada `functionDeclaration` va con `behavior: "BLOCKING"`, porque con el
  *    default `NON_BLOCKING` el turno cierra antes de que vuelva el resultado
- *    de la tool y el asistente se queda sin responder.
+ *    de la tool y el asistente se queda sin responder;
+ *  - hay dos sockets con propósitos distintos: **conversación**
+ *    (`responseModalities: ["AUDIO"]` + prompt + tools) y **transcripción del
+ *    usuario** (`responseModalities: ["TEXT"]` + `inputAudioTranscription`).
+ *    `gemini-3.8-live` acepta `inputAudioTranscription` pero **no emite nunca**
+ *    `inputTranscription`, por eso la voz del usuario se transcribe en un
+ *    segundo socket con `gemini-3.5-transcribe-live`.
  */
 
 import { toGeminiSchema } from "@/integrations/chat/tools/geminiSchema";
 import type { ToolDefinition } from "@/integrations/chat/tools/types";
+
+export type LiveTokenPurpose = "conversation" | "transcription";
 
 export interface LiveFunctionDeclaration {
   name: string;
@@ -28,14 +36,17 @@ export interface LiveToolGroup {
 export interface BidiGenerateContentSetup {
   model: string;
   generationConfig: { responseModalities: string[] };
-  systemInstruction: { parts: Array<{ text: string }> };
+  systemInstruction?: { parts: Array<{ text: string }> };
   tools?: LiveToolGroup[];
+  inputAudioTranscription?: { languageCodes: string[] };
 }
 
 export interface BuildLiveConnectConstraintsInput {
   model: string;
-  systemInstruction: string;
-  tools: readonly ToolDefinition[];
+  /** Default `"conversation"`. */
+  purpose?: LiveTokenPurpose;
+  systemInstruction?: string;
+  tools?: readonly ToolDefinition[];
 }
 
 export interface AuthTokenRequestBody {
@@ -64,22 +75,51 @@ function withModelsPrefix(model: string): string {
   return trimmed.startsWith("models/") ? trimmed : `models/${trimmed}`;
 }
 
-export function buildLiveConnectConstraints(
+/**
+ * Restricciones de conversación: **solo** modelo, modalidad, instrucción y tools.
+ * `sessionResumption` y `contextWindowCompression` NO se fijan acá: el servidor
+ * ya habilita la resumption por defecto (manda el handle) y el cliente aporta
+ * ambos campos en su propio `setup`. Bloquearlos en el token dejaría sin
+ * verificar la combinación "handle del cliente + config bloqueada" justo en la
+ * reconexión de los ~10 minutos.
+ */
+function buildConversationSetup(
   input: BuildLiveConnectConstraintsInput,
 ): BidiGenerateContentSetup {
-  const functionDeclarations = input.tools.map(toLiveFunctionDeclaration);
+  const functionDeclarations = (input.tools ?? []).map(toLiveFunctionDeclaration);
 
   const setup: BidiGenerateContentSetup = {
     model: withModelsPrefix(input.model),
     generationConfig: { responseModalities: ["AUDIO"] },
-    systemInstruction: { parts: [{ text: input.systemInstruction }] },
   };
+
+  if (input.systemInstruction) {
+    setup.systemInstruction = { parts: [{ text: input.systemInstruction }] };
+  }
 
   if (functionDeclarations.length > 0) {
     setup.tools = [{ functionDeclarations }];
   }
 
   return setup;
+}
+
+function buildTranscriptionSetup(
+  input: BuildLiveConnectConstraintsInput,
+): BidiGenerateContentSetup {
+  return {
+    model: withModelsPrefix(input.model),
+    generationConfig: { responseModalities: ["TEXT"] },
+    inputAudioTranscription: { languageCodes: [] },
+  };
+}
+
+export function buildLiveConnectConstraints(
+  input: BuildLiveConnectConstraintsInput,
+): BidiGenerateContentSetup {
+  return input.purpose === "transcription"
+    ? buildTranscriptionSetup(input)
+    : buildConversationSetup(input);
 }
 
 export function buildAuthTokenRequestBody(input: {

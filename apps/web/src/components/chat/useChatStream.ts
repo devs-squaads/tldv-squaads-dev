@@ -309,6 +309,19 @@ export function useChatStream() {
     ]);
   }, []);
 
+  /**
+   * Agrega mensajes ya cerrados al **mismo** estado que persiste el autosave.
+   * Lo usa la voz (018) para que los turnos hablados entren al historial por la
+   * vía normal del chat y no se pisen con el guardado del texto.
+   */
+  const appendMessages = useCallback((incoming: DisplayMessage[]) => {
+    if (incoming.length === 0) return;
+    setMessages((prev) => [
+      ...prev,
+      ...incoming.map((message) => ({ role: message.role, content: message.content })),
+    ]);
+  }, []);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     setMessages([]);
@@ -330,6 +343,7 @@ export function useChatStream() {
     activeToolCall,
     sendMessage,
     addQuickReply,
+    appendMessages,
     clearSuggestions,
     reset,
   };

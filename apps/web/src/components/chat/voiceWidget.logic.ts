@@ -1,7 +1,10 @@
 /**
  * Lógica pura del widget de voz: etiquetas de estado, acumulación de
- * transcripciones y composición de los mensajes a mostrar. La UI visual queda
+ * transcripciones y composición de los mensajes en vivo. La UI visual queda
  * fuera de los unit tests; esto sí se testea.
+ *
+ * Los turnos ya cerrados **no** se componen acá: entran al mismo estado de
+ * `useChatStream` (vía `appendMessages`) y llegan por `messages`.
  */
 
 import type { DisplayMessage } from "@/components/chat/useChatStream";
@@ -50,26 +53,23 @@ export function mergeTranscriptText(current: string, incoming: string): string {
   return current + incoming;
 }
 
+/** Agrega al final las transcripciones en vivo (parciales) del turno en curso. */
 export function buildVoiceDisplayMessages(input: {
   messages: DisplayMessage[];
-  turns: VoiceTranscriptTurn[];
   liveUserText: string;
   liveAssistantText: string;
 }): DisplayMessage[] {
-  const voiceMessages: DisplayMessage[] = input.turns.map((turn) => ({
-    role: turn.role,
-    content: turn.content,
-  }));
+  const liveMessages: DisplayMessage[] = [];
 
   const liveUserText = input.liveUserText.trim();
   const liveAssistantText = input.liveAssistantText.trim();
 
   if (liveUserText) {
-    voiceMessages.push({ role: "user", content: liveUserText });
+    liveMessages.push({ role: "user", content: liveUserText });
   }
   if (liveAssistantText) {
-    voiceMessages.push({ role: "assistant", content: liveAssistantText, isStreaming: true });
+    liveMessages.push({ role: "assistant", content: liveAssistantText, isStreaming: true });
   }
 
-  return voiceMessages.length > 0 ? [...input.messages, ...voiceMessages] : input.messages;
+  return liveMessages.length > 0 ? [...input.messages, ...liveMessages] : input.messages;
 }

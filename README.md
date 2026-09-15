@@ -237,7 +237,8 @@ bun run dictionary:refine --commit
 | `GROQ_TEXT_MODEL`                                             | Opcional. Modelo de texto para resumen, refiner y atribución de hablantes. Default verificado: `openai/gpt-oss-120b`. Es de razonamiento: consume tokens antes de responder, así que necesita presupuesto de salida holgado. |
 | `GEMINI_MODEL`                                                | Opcional. Modelo de Gemini. Default verificado: `gemini-3.8-flash`. |
 | `VOICE_CHAT_ENABLED`                                          | Apagado por defecto (`false`). `true` habilita la voz en tiempo real en el chat (botón de micrófono y `POST /api/chat/voice/token`). Requiere `GEMINI_API_KEY`: el audio del micrófono viaja directo del navegador a Google Gemini Live. |
-| `GEMINI_LIVE_MODEL`                                           | Opcional. Modelo de Gemini Live para la voz. Default verificado: `gemini-3.8-live`. |
+| `GEMINI_LIVE_MODEL`                                           | Opcional. Modelo del socket de **conversación** de voz. Default verificado: `gemini-3.8-live`. |
+| `GEMINI_LIVE_TRANSCRIBE_MODEL`                                | Opcional. Modelo del socket de **transcripción** de la voz del usuario (el de conversación no entrega `inputTranscription`). Default verificado: `gemini-3.5-transcribe-live`. Coste adicional: ~$0.009/min. |
 | `VOICE_CHAT_MAX_SESSION_MINUTES`                              | Opcional. Tope de duración de una sesión de voz, en minutos. Default: `15`. Al alcanzarlo la sesión cierra con aviso visible. |
 | `FFMPEG_PATH` / `FFPROBE_PATH`                                | Opcional. Rutas a los binarios de ffmpeg. Por defecto se resuelven del `PATH`. |
 | `OPENAI_API_KEY`                                              | Fallback opcional adicional para resumen. |
@@ -324,11 +325,23 @@ hablantes y sin resumen. Si cambias de proveedor o de modelo, ejecútalo.
 - El WebSocket va del **navegador directo a Google** (no se proxea): el audio no atraviesa nuestra
   infraestructura ni se almacena. **Privacidad:** la voz del usuario se envía a Google Gemini Live
   para transcribir y responder; la UI muestra ese aviso antes de pedir el micrófono.
+- **Dos sockets por sesión**, con un token por socket:
+  - *conversación* (`GEMINI_LIVE_MODEL`): recibe la voz del usuario por `clientContent` y devuelve
+    audio + `outputTranscription` + `toolCall`. Cierra el turno con `{ clientContent: { turnComplete: true } }`.
+    El `contextWindowCompression` y el handle de `sessionResumption` los aporta el **cliente** en su
+    propio `setup`, no el token.
+  - *transcripción* (`GEMINI_LIVE_TRANSCRIBE_MODEL`): transcribe la voz del usuario en vivo por
+    `realtimeInput.audio` y emite `inputTranscription`. Es necesario porque el socket de conversación
+    **no** entrega la transcripción de entrada. Coste adicional: ~$0.009/min.
+- Interfaz v1 **push-to-talk por click**: con la sesión activa, el micrófono inicia el turno del
+  usuario y un segundo click lo termina. Sin VAD propio ni corte automático por silencio.
 - Por voz solo se pueden ejecutar las tools de lectura (`search_meetings`, `get_meeting_detail`,
-  `get_system_status`); el puente `POST /api/chat/voice/tool` responde `403` para cualquier otra.
-- La conversación se persiste en el historial del chat (`/api/chat/history`) y sigue ahí tras
-  recargar. Hay rate limit por usuario en el minteo (`429`) y un tope de duración configurable que
-  cierra la sesión con aviso visible.
+  `get_system_status`); el puente `POST /api/chat/voice/tool` responde `403` para cualquier otra. Las
+  declaraciones viajan con `behavior: "BLOCKING"` para que el turno espere el resultado.
+- Los turnos cerrados entran al mismo estado del chat (`appendMessages` en `useChatStream`), así el
+  autosave los persiste en el historial y siguen ahí tras recargar. Hay rate limit por usuario en el
+  minteo (**una vez por sesión**, `429`) y un tope de duración configurable que cierra la sesión con
+  aviso visible.
 - Protocolo verificado contra la API real y decisiones: `spec/features/018-voice-live-chat/plan.md`.
 
 ### Relación con Observability V2

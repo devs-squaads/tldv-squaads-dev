@@ -1,30 +1,50 @@
 "use client";
 
 /**
- * useVoiceSession — transporte de la voz en tiempo real.
+ * useVoiceSession — transporte de la voz en tiempo real (protocolo corregido).
  *
- * El navegador habla **directo** contra Gemini Live con un token efímero
- * minteado por el servidor; el audio no atraviesa nuestra infraestructura. La
- * configuración, la `systemInstruction` y las tools vienen fijadas en el token,
- * así que el único mensaje de arranque es `{ setup: {} }` — y en reconexión,
- * `{ setup: { sessionResumption: { handle } } }` con un token **nuevo**
- * (reusar uno cierra con 1011).
+ * Dos sockets en paralelo, cada uno con su token efímero restringido:
+ *  - **conversación** (`gemini-3.8-live`): recibe la voz del usuario por
+ *    `clientContent` con `inlineData` (`realtimeInput.audio` se ignora en
+ *    silencio en ese modelo) y cierra el turno con
+ *    `{ clientContent: { turnComplete: true } }`. Devuelve audio +
+ *    `outputTranscription` + `toolCall`.
+ *  - **transcripción** (`gemini-3.5-transcribe-live`): recibe la voz por
+ *    `realtimeInput.audio`, cierra con `audioStreamEnd` y emite
+ *    `inputTranscription` (el socket de conversación no la entrega). **No** manda
+ *    `turnComplete`: no se espera.
+ *
+ * El primer mensaje de cada socket es `{ setup: {} }`; la config viene fijada en
+ * el token. Al reconectar se mintea un token **nuevo** (reusar da 1011) y se abre
+ * con `{ setup: { sessionResumption: { handle } } }`.
  *
  * Toda la lógica de decisión vive en módulos puros (`liveEvents`,
- * `voiceSessionState`, `pcm`); acá solo hay efectos de navegador y red.
+ * `liveClientMessages`, `voiceSessionState`, `pcm`); acá solo hay efectos de
+ * navegador y red.
  */
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import type { DisplayMessage } from "@/components/chat/useChatStream";
 import {
   mergeTranscriptText,
   type VoiceTranscriptTurn,
 } from "@/components/chat/voiceWidget.logic";
 import {
+  buildConversationAudioMessage,
+  buildConversationSetupMessage,
+  buildConversationTurnCompleteMessage,
+  buildToolResponseMessage,
+  buildTranscriptionAudioMessage,
+  buildTranscriptionSetupMessage,
+  buildTranscriptionStreamEndMessage,
+  type LiveFunctionResponse,
+} from "@/modules/chat/voice/liveClientMessages";
+import {
   normalizeLiveServerMessage,
   type LiveFunctionCall,
+  type LiveServerEvent,
 } from "@/modules/chat/voice/liveEvents";
+import type { LiveTokenPurpose } from "@/modules/chat/voice/liveTokenRequest";
 import {
   base64ToPcm16,
   downsampleTo16k,
@@ -48,6 +68,10 @@ const PLAYBACK_WORKLET_URL = "/worklets/pcm-playback.js";
 const MEDIA_ERROR_PREFIX = "No se pudo acceder al micrófono";
 const DURATION_CAP_NOTICE =
   "Se alcanzó el tope de duración de la sesión de voz. Podés iniciar otra cuando quieras.";
+const TRANSCRIPTION_LOST_NOTICE =
+  "Se perdió la transcripción en vivo de tu voz; el asistente sigue respondiendo.";
+
+const MAX_TRANSCRIPTION_RECONNECTS = 2;
 
 interface VoiceTokenPayload {
   token: string;
@@ -76,22 +100,29 @@ async function toFrameText(raw: unknown): Promise<string> {
 }
 
 export interface UseVoiceSessionOptions {
-  history: DisplayMessage[];
   maxSessionMinutes: number;
+  /**
+   * Entrega los turnos cerrados al chat. `ChatWidget` los inyecta en el estado
+   * de `useChatStream`, así el autosave del texto los persiste en el historial.
+   */
+  onTurnsCommitted: (turns: VoiceTranscriptTurn[]) => void;
 }
 
 export interface UseVoiceSessionResult {
   status: VoiceSessionStatus;
   activity: VoiceActivity;
-  turns: VoiceTranscriptTurn[];
   liveUserText: string;
   liveAssistantText: string;
   error: string | null;
   notice: string | null;
   isActive: boolean;
   canStart: boolean;
+  /** Turno push-to-talk en curso (el usuario está hablando). */
+  isRecording: boolean;
   start: () => Promise<void>;
   stop: () => void;
+  startTurn: () => void;
+  endTurn: () => void;
   clearNotice: () => void;
 }
 
@@ -101,17 +132,21 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
     undefined,
     createInitialVoiceSessionState,
   );
-  const [turns, setTurns] = useState<VoiceTranscriptTurn[]>([]);
   const [liveUserText, setLiveUserText] = useState("");
   const [liveAssistantText, setLiveAssistantText] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const socketRef = useRef<WebSocket | null>(null);
-  const socketPurposeRef = useRef<"initial" | "reconnect">("initial");
-  const openedRef = useRef(false);
+  const conversationSocketRef = useRef<WebSocket | null>(null);
+  const transcriptionSocketRef = useRef<WebSocket | null>(null);
+  const conversationPurposeRef = useRef<"initial" | "reconnect">("initial");
+  const conversationOpenedRef = useRef(false);
   const closingRef = useRef(false);
+  const recordingRef = useRef(false);
   const resumptionHandleRef = useRef<string | null>(null);
+  const transcriptionReconnectsRef = useRef(0);
+  const reopenTranscriptionSocketRef = useRef<() => void>(() => {});
 
   const streamRef = useRef<MediaStream | null>(null);
   const captureContextRef = useRef<AudioContext | null>(null);
@@ -122,25 +157,24 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
 
   const pendingUserRef = useRef("");
   const pendingAssistantRef = useRef("");
-  const persistedTurnsRef = useRef<VoiceTranscriptTurn[]>([]);
-  const historyRef = useRef<DisplayMessage[]>(options.history);
   const maxSessionMinutesRef = useRef(options.maxSessionMinutes);
+  const onTurnsCommittedRef = useRef(options.onTurnsCommitted);
   const durationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptReconnectRef = useRef<() => void>(() => {});
+  const stateRef = useRef(state);
 
   useEffect(() => {
-    historyRef.current = options.history;
     maxSessionMinutesRef.current = options.maxSessionMinutes;
+    onTurnsCommittedRef.current = options.onTurnsCommitted;
+    stateRef.current = state;
   });
 
-  const sendRealtime = useCallback((payload: unknown) => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify(payload));
-  }, []);
-
-  const requestToken = useCallback(async (): Promise<string> => {
-    const response = await fetch("/api/chat/voice/token", { method: "POST" });
+  const requestToken = useCallback(async (purpose: LiveTokenPurpose): Promise<string> => {
+    const response = await fetch("/api/chat/voice/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ purpose }),
+    });
     const payload: unknown = await response.json().catch(() => null);
 
     if (!response.ok) {
@@ -158,22 +192,16 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
     return payload.token;
   }, []);
 
-  const persistHistory = useCallback(() => {
-    const messages = [
-      ...historyRef.current.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
-      ...persistedTurnsRef.current,
-    ];
+  const sendToConversation = useCallback((message: unknown) => {
+    const socket = conversationSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(message));
+  }, []);
 
-    void fetch("/api/chat/history", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages }),
-    }).catch(() => {
-      // Silencioso: la sesión sigue viva aunque falle la persistencia.
-    });
+  const sendToTranscription = useCallback((message: unknown) => {
+    const socket = transcriptionSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(message));
   }, []);
 
   const commitTurn = useCallback(() => {
@@ -184,15 +212,13 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
     setLiveUserText("");
     setLiveAssistantText("");
 
-    const newTurns: VoiceTranscriptTurn[] = [];
-    if (user) newTurns.push({ role: "user", content: user });
-    if (assistant) newTurns.push({ role: "assistant", content: assistant });
-    if (newTurns.length === 0) return;
+    const turns: VoiceTranscriptTurn[] = [];
+    if (user) turns.push({ role: "user", content: user });
+    if (assistant) turns.push({ role: "assistant", content: assistant });
+    if (turns.length === 0) return;
 
-    setTurns((previous) => [...previous, ...newTurns]);
-    persistedTurnsRef.current = [...persistedTurnsRef.current, ...newTurns];
-    persistHistory();
-  }, [persistHistory]);
+    onTurnsCommittedRef.current(turns);
+  }, []);
 
   const flushPlayback = useCallback(() => {
     playbackNodeRef.current?.port.postMessage({ type: "flush" });
@@ -243,15 +269,16 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
       captureNode.port.onmessage = (event: MessageEvent) => {
         const chunk: unknown = event.data;
         if (!(chunk instanceof Float32Array)) return;
-        const downsampled = downsampleTo16k(chunk, captureContext.sampleRate);
-        sendRealtime({
-          realtimeInput: {
-            audio: {
-              data: pcm16ToBase64(float32ToPcm16(downsampled)),
-              mimeType: "audio/pcm;rate=16000",
-            },
-          },
-        });
+        // Solo se manda audio mientras el usuario mantiene su turno (push-to-talk).
+        if (!recordingRef.current) return;
+
+        const base64 = pcm16ToBase64(
+          float32ToPcm16(downsampleTo16k(chunk, captureContext.sampleRate)),
+        );
+        // Conversación: clientContent (realtimeInput.audio se ignora en 3.8-live).
+        sendToConversation(buildConversationAudioMessage(base64));
+        // Transcripción: realtimeInput.audio en su propio socket.
+        sendToTranscription(buildTranscriptionAudioMessage(base64));
       };
 
       // El worklet no procesa si no llega a destination; el gain en 0 evita eco.
@@ -277,16 +304,18 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
       setError(`${MEDIA_ERROR_PREFIX}: ${detail}`);
       setNotice("Sin permiso de micrófono no se puede usar la voz.");
       closingRef.current = true;
+      recordingRef.current = false;
+      setIsRecording(false);
       stopMedia();
       dispatch({ type: "stop" });
     }
-  }, [sendRealtime, stopMedia]);
+  }, [sendToConversation, sendToTranscription, stopMedia]);
 
   const handleToolCall = useCallback(
     async (functionCalls: LiveFunctionCall[]) => {
       if (functionCalls.length === 0) return;
 
-      const functionResponses = await Promise.all(
+      const functionResponses: LiveFunctionResponse[] = await Promise.all(
         functionCalls.map(async (call) => {
           let response: Record<string, unknown>;
 
@@ -318,86 +347,135 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
       );
 
       // Forma verificada contra la API real.
-      sendRealtime({ toolResponse: { functionResponses } });
+      sendToConversation(buildToolResponseMessage(functionResponses));
     },
-    [sendRealtime],
+    [sendToConversation],
   );
 
-  const handleMessage = useCallback(
-    async (raw: unknown) => {
-      const frame = await toFrameText(raw);
-      const events = normalizeLiveServerMessage(frame);
+  const handleConversationEvent = useCallback(
+    (event: LiveServerEvent) => {
+      dispatch({ type: "server-event", event });
 
-      for (const event of events) {
-        dispatch({ type: "server-event", event });
-
-        switch (event.type) {
-          case "audio":
-            playAudio(event.data);
-            break;
-          case "input-transcript":
-            pendingUserRef.current = mergeTranscriptText(
-              pendingUserRef.current,
-              event.text,
-            );
-            setLiveUserText(pendingUserRef.current);
-            break;
-          case "output-transcript":
-            pendingAssistantRef.current = mergeTranscriptText(
-              pendingAssistantRef.current,
-              event.text,
-            );
-            setLiveAssistantText(pendingAssistantRef.current);
-            break;
-          case "interrupted":
-            flushPlayback();
-            break;
-          case "turn-complete":
-            commitTurn();
-            break;
-          case "tool-call":
-            void handleToolCall(event.functionCalls);
-            break;
-          case "resumption-update":
-            if (event.newHandle) resumptionHandleRef.current = event.newHandle;
-            break;
-          case "error":
-            setError(event.message);
-            break;
-          default:
-            break;
-        }
+      switch (event.type) {
+        case "audio":
+          playAudio(event.data);
+          break;
+        case "output-transcript":
+          pendingAssistantRef.current = mergeTranscriptText(
+            pendingAssistantRef.current,
+            event.text,
+          );
+          setLiveAssistantText(pendingAssistantRef.current);
+          break;
+        case "input-transcript":
+          pendingUserRef.current = mergeTranscriptText(pendingUserRef.current, event.text);
+          setLiveUserText(pendingUserRef.current);
+          break;
+        case "interrupted":
+          flushPlayback();
+          break;
+        case "turn-complete":
+          commitTurn();
+          break;
+        case "tool-call":
+          void handleToolCall(event.functionCalls);
+          break;
+        case "resumption-update":
+          if (event.newHandle) resumptionHandleRef.current = event.newHandle;
+          break;
+        case "error":
+          setError(event.message);
+          break;
+        default:
+          break;
       }
     },
     [commitTurn, flushPlayback, handleToolCall, playAudio],
   );
 
-  const openSocket = useCallback(
+  const openTranscriptionSocket = useCallback((token: string) => {
+    const socket = new WebSocket(`${LIVE_WS_URL}?access_token=${token}`);
+    socket.binaryType = "arraybuffer";
+    transcriptionSocketRef.current = socket;
+
+    socket.onopen = () => {
+      // Config fijada en el token; setup primero y único. La transcripción no
+      // necesita resumption ni compresión.
+      socket.send(JSON.stringify(buildTranscriptionSetupMessage()));
+    };
+
+    socket.onmessage = (event: MessageEvent) => {
+      void (async () => {
+        const events = normalizeLiveServerMessage(await toFrameText(event.data));
+        for (const serverEvent of events) {
+          if (serverEvent.type === "input-transcript") {
+            pendingUserRef.current = mergeTranscriptText(
+              pendingUserRef.current,
+              serverEvent.text,
+            );
+            setLiveUserText(pendingUserRef.current);
+          } else if (serverEvent.type === "error") {
+            setError(serverEvent.message);
+          }
+          // Este modelo no manda turnComplete: no se espera ni se cierra nada.
+        }
+      })();
+    };
+
+    socket.onclose = () => {
+      if (closingRef.current || transcriptionSocketRef.current !== socket) return;
+      transcriptionSocketRef.current = null;
+      reopenTranscriptionSocketRef.current();
+    };
+  }, []);
+
+  const reopenTranscriptionSocket = useCallback(() => {
+    void (async () => {
+      if (closingRef.current) return;
+
+      if (transcriptionReconnectsRef.current >= MAX_TRANSCRIPTION_RECONNECTS) {
+        setNotice(TRANSCRIPTION_LOST_NOTICE);
+        return;
+      }
+      transcriptionReconnectsRef.current += 1;
+
+      try {
+        const token = await requestToken("transcription");
+        if (closingRef.current) return;
+        openTranscriptionSocket(token);
+      } catch {
+        setNotice(TRANSCRIPTION_LOST_NOTICE);
+      }
+    })();
+  }, [openTranscriptionSocket, requestToken]);
+
+  useEffect(() => {
+    reopenTranscriptionSocketRef.current = reopenTranscriptionSocket;
+  }, [reopenTranscriptionSocket]);
+
+  const openConversationSocket = useCallback(
     (token: string, resumptionHandle: string | undefined, purpose: "initial" | "reconnect") => {
       closingRef.current = false;
-      openedRef.current = false;
-      socketPurposeRef.current = purpose;
+      conversationOpenedRef.current = false;
+      conversationPurposeRef.current = purpose;
 
       const socket = new WebSocket(`${LIVE_WS_URL}?access_token=${token}`);
       socket.binaryType = "arraybuffer";
-      socketRef.current = socket;
+      conversationSocketRef.current = socket;
 
       socket.onopen = () => {
-        openedRef.current = true;
-        // `setup` debe ser el primer y único mensaje inicial. La config ya viene
-        // fijada dentro del token; en reconexión solo se manda el handle.
-        if (resumptionHandle) {
-          socket.send(JSON.stringify({ setup: { sessionResumption: { handle: resumptionHandle } } }));
-        } else {
-          socket.send(JSON.stringify({ setup: {} }));
-        }
-
+        conversationOpenedRef.current = true;
+        socket.send(JSON.stringify(buildConversationSetupMessage(resumptionHandle)));
         dispatch({ type: "socket-open" });
         void startMedia();
       };
 
       socket.onmessage = (event: MessageEvent) => {
-        void handleMessage(event.data);
+        void (async () => {
+          for (const serverEvent of normalizeLiveServerMessage(await toFrameText(event.data))) {
+            handleConversationEvent(serverEvent);
+          }
+        })();
       };
 
       socket.onerror = () => {
@@ -405,23 +483,25 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
       };
 
       socket.onclose = () => {
-        if (closingRef.current || socketRef.current !== socket) return;
-        socketRef.current = null;
+        if (closingRef.current || conversationSocketRef.current !== socket) return;
+        conversationSocketRef.current = null;
+        recordingRef.current = false;
+        setIsRecording(false);
         stopMedia();
 
-        if (socketPurposeRef.current === "reconnect" && !openedRef.current) {
+        if (conversationPurposeRef.current === "reconnect" && !conversationOpenedRef.current) {
           dispatch({ type: "reconnect-failed" });
           return;
         }
 
-        if (socketPurposeRef.current === "initial" && !openedRef.current) {
+        if (conversationPurposeRef.current === "initial" && !conversationOpenedRef.current) {
           setError("No se pudo conectar con la sesión de voz.");
         }
 
         dispatch({ type: "connection-lost" });
       };
     },
-    [handleMessage, startMedia, stopMedia],
+    [handleConversationEvent, startMedia, stopMedia],
   );
 
   const attemptReconnect = useCallback(() => {
@@ -430,14 +510,19 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
       if (closingRef.current) return;
 
       try {
-        const token = await requestToken();
+        const token = await requestToken("conversation");
         if (closingRef.current) return;
-        openSocket(token, resumptionHandleRef.current ?? undefined, "reconnect");
+        openConversationSocket(token, resumptionHandleRef.current ?? undefined, "reconnect");
+
+        // El socket de transcripción puede haber caído por su cuenta.
+        if (!transcriptionSocketRef.current) {
+          reopenTranscriptionSocketRef.current();
+        }
       } catch {
         if (!closingRef.current) dispatch({ type: "reconnect-failed" });
       }
     })();
-  }, [openSocket, requestToken]);
+  }, [openConversationSocket, requestToken]);
 
   useEffect(() => {
     attemptReconnectRef.current = attemptReconnect;
@@ -458,6 +543,28 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
     }
   }, []);
 
+  const teardownSockets = useCallback(() => {
+    const conversation = conversationSocketRef.current;
+    conversationSocketRef.current = null;
+    if (conversation && conversation.readyState <= WebSocket.OPEN) {
+      try {
+        conversation.close();
+      } catch {
+        // ya cerrado
+      }
+    }
+
+    const transcription = transcriptionSocketRef.current;
+    transcriptionSocketRef.current = null;
+    if (transcription && transcription.readyState <= WebSocket.OPEN) {
+      try {
+        transcription.close();
+      } catch {
+        // ya cerrado
+      }
+    }
+  }, []);
+
   const startDurationCap = useCallback(() => {
     clearDurationCap();
     const minutes = Math.max(1, maxSessionMinutesRef.current);
@@ -465,53 +572,71 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
       dispatch({ type: "duration-cap-reached" });
       setNotice(DURATION_CAP_NOTICE);
       closingRef.current = true;
+      recordingRef.current = false;
+      setIsRecording(false);
       commitTurn();
       stopMedia();
-      const socket = socketRef.current;
-      socketRef.current = null;
-      if (socket && socket.readyState <= WebSocket.OPEN) {
-        try {
-          socket.close();
-        } catch {
-          // ya cerrado
-        }
-      }
+      teardownSockets();
     }, minutes * 60_000);
-  }, [clearDurationCap, commitTurn, stopMedia]);
+  }, [clearDurationCap, commitTurn, stopMedia, teardownSockets]);
 
   const stop = useCallback(() => {
     closingRef.current = true;
     clearDurationCap();
+    recordingRef.current = false;
+    setIsRecording(false);
     flushPlayback();
     commitTurn();
     stopMedia();
-    const socket = socketRef.current;
-    socketRef.current = null;
-    if (socket && socket.readyState <= WebSocket.OPEN) {
-      try {
-        socket.close();
-      } catch {
-        // ya cerrado
-      }
-    }
+    teardownSockets();
     dispatch({ type: "stop" });
-  }, [clearDurationCap, commitTurn, flushPlayback, stopMedia]);
+  }, [clearDurationCap, commitTurn, flushPlayback, stopMedia, teardownSockets]);
+
+  const startTurn = useCallback(() => {
+    if (stateRef.current.status !== "active") return;
+    if (recordingRef.current) return;
+
+    recordingRef.current = true;
+    setIsRecording(true);
+    pendingUserRef.current = "";
+    pendingAssistantRef.current = "";
+    setLiveUserText("");
+    setLiveAssistantText("");
+  }, []);
+
+  const endTurn = useCallback(() => {
+    if (!recordingRef.current) return;
+
+    recordingRef.current = false;
+    setIsRecording(false);
+    // Cierre del turno del usuario: SIEMPRE en el socket de conversación.
+    sendToConversation(buildConversationTurnCompleteMessage());
+    // El socket de transcripción cierra su stream de audio (no hay turnComplete).
+    sendToTranscription(buildTranscriptionStreamEndMessage());
+  }, [sendToConversation, sendToTranscription]);
 
   const start = useCallback(async () => {
     setError(null);
     setNotice(null);
+    setIsRecording(false);
     setLiveUserText("");
     setLiveAssistantText("");
     pendingUserRef.current = "";
     pendingAssistantRef.current = "";
     resumptionHandleRef.current = null;
+    transcriptionReconnectsRef.current = 0;
+    recordingRef.current = false;
     closingRef.current = false;
 
     dispatch({ type: "start" });
 
-    let token: string;
+    let conversationToken: string;
+    let transcriptionToken: string;
     try {
-      token = await requestToken();
+      [conversationToken, transcriptionToken] = await Promise.all([
+        requestToken("conversation"),
+        requestToken("transcription"),
+      ]);
     } catch (tokenError) {
       const message =
         tokenError instanceof Error ? tokenError.message : "No se pudo iniciar la voz";
@@ -521,27 +646,20 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
     }
 
     dispatch({ type: "token-acquired" });
-    openSocket(token, undefined, "initial");
+    openConversationSocket(conversationToken, undefined, "initial");
+    openTranscriptionSocket(transcriptionToken);
     startDurationCap();
-  }, [openSocket, requestToken, startDurationCap]);
+  }, [openConversationSocket, openTranscriptionSocket, requestToken, startDurationCap]);
 
-  // Limpieza al desmontar: nunca dejar el micrófono ni el socket abiertos.
+  // Limpieza al desmontar: nunca dejar el micrófono ni los sockets abiertos.
   useEffect(() => {
     return () => {
       closingRef.current = true;
       clearDurationCap();
       stopMedia();
-      const socket = socketRef.current;
-      socketRef.current = null;
-      if (socket && socket.readyState <= WebSocket.OPEN) {
-        try {
-          socket.close();
-        } catch {
-          // ya cerrado
-        }
-      }
+      teardownSockets();
     };
-  }, [clearDurationCap, stopMedia]);
+  }, [clearDurationCap, stopMedia, teardownSockets]);
 
   const isActive =
     state.status === "requesting-token" ||
@@ -552,15 +670,17 @@ export function useVoiceSession(options: UseVoiceSessionOptions): UseVoiceSessio
   return {
     status: state.status,
     activity: state.activity,
-    turns,
     liveUserText,
     liveAssistantText,
     error,
     notice,
     isActive,
     canStart: state.status === "idle" || state.status === "ended" || state.status === "error",
+    isRecording,
     start,
     stop,
+    startTurn,
+    endTurn,
     clearNotice: () => setNotice(null),
   };
 }

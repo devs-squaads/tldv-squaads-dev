@@ -5,6 +5,7 @@ import { describe, expect, it } from "bun:test";
 import {
   VOICE_CHAT_DEFAULT_MAX_SESSION_MINUTES,
   VOICE_CHAT_DEFAULT_MODEL,
+  VOICE_CHAT_DEFAULT_TRANSCRIBE_MODEL,
   VOICE_CHAT_TOKEN_RATE_LIMIT,
   VOICE_CHAT_TOKEN_RATE_LIMIT_WINDOW_MS,
   resolveVoicePolicy,
@@ -17,6 +18,8 @@ describe("resolveVoicePolicy", () => {
     expect(policy.enabled).toBe(false);
     expect(policy.model).toBe(VOICE_CHAT_DEFAULT_MODEL);
     expect(policy.model).toBe("gemini-3.8-live");
+    expect(policy.transcribeModel).toBe(VOICE_CHAT_DEFAULT_TRANSCRIBE_MODEL);
+    expect(policy.transcribeModel).toBe("gemini-3.5-transcribe-live");
     expect(policy.maxSessionMinutes).toBe(VOICE_CHAT_DEFAULT_MAX_SESSION_MINUTES);
     expect(policy.maxSessionMinutes).toBe(15);
     expect(policy.rateLimit).toEqual({
@@ -36,6 +39,16 @@ describe("resolveVoicePolicy", () => {
   it("usa GEMINI_LIVE_MODEL cuando está definido y cae al default si está vacío", () => {
     expect(resolveVoicePolicy({ GEMINI_LIVE_MODEL: "gemini-4.0-live" }).model).toBe("gemini-4.0-live");
     expect(resolveVoicePolicy({ GEMINI_LIVE_MODEL: "   " }).model).toBe(VOICE_CHAT_DEFAULT_MODEL);
+  });
+
+  it("usa GEMINI_LIVE_TRANSCRIBE_MODEL cuando está definido y cae al default si está vacío", () => {
+    expect(
+      resolveVoicePolicy({ GEMINI_LIVE_TRANSCRIBE_MODEL: "gemini-4.0-transcribe-live" })
+        .transcribeModel,
+    ).toBe("gemini-4.0-transcribe-live");
+    expect(resolveVoicePolicy({ GEMINI_LIVE_TRANSCRIBE_MODEL: "  " }).transcribeModel).toBe(
+      VOICE_CHAT_DEFAULT_TRANSCRIBE_MODEL,
+    );
   });
 
   it("usa VOICE_CHAT_MAX_SESSION_MINUTES cuando es un entero positivo", () => {

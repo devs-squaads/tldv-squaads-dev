@@ -4,8 +4,12 @@
  * Módulo puro: convierte el frame crudo (string JSON u objeto) en una lista de
  * eventos tipados y consumibles. Un mismo mensaje puede producir **varios**
  * eventos (por ejemplo `modelTurn` con audio + transcripción + `turnComplete`).
- * Entrada inválida → `unknown`, nunca una excepción: un frame raro no debe
- * tumbar la sesión de voz.
+ *
+ * Particularidades verificadas contra la API real:
+ *  - llegan **mensajes vacíos `{}`** (y claves de telemetría como
+ *    `generationComplete`/`usageMetadata`) que hay que ignorar sin error;
+ *  - entrada inválida → `unknown`, nunca una excepción: un frame raro no debe
+ *    tumbar la sesión de voz.
  */
 
 export interface LiveFunctionCall {
@@ -29,6 +33,9 @@ export type LiveServerEvent =
   | { type: "unknown" };
 
 const UNKNOWN: LiveServerEvent = { type: "unknown" };
+
+/** Claves que el servidor manda y no producen eventos (telemetría/ruido). */
+const IGNORED_KEYS = new Set(["usageMetadata", "generationComplete"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -114,24 +121,45 @@ export function normalizeLiveServerMessage(raw: unknown): LiveServerEvent[] {
   const message = parseFrame(raw);
   if (!message) return [UNKNOWN];
 
+  const keys = Object.keys(message);
+  if (keys.length === 0) return [];
+
+  const setupComplete = has(message, "setupComplete");
+  const serverContent = asRecord(message.serverContent);
+  const toolCall = asRecord(message.toolCall);
+  const toolCallCancellation = asRecord(message.toolCallCancellation);
+  const resumptionUpdate = asRecord(message.sessionResumptionUpdate);
+  const hasGoAway = has(message, "goAway");
+  const hasError = has(message, "error");
+
+  const recognized =
+    setupComplete ||
+    serverContent !== null ||
+    toolCall !== null ||
+    toolCallCancellation !== null ||
+    resumptionUpdate !== null ||
+    hasGoAway ||
+    hasError;
+
+  if (!recognized) {
+    return keys.every((key) => IGNORED_KEYS.has(key)) ? [] : [UNKNOWN];
+  }
+
   const events: LiveServerEvent[] = [];
 
-  if (has(message, "setupComplete")) {
+  if (setupComplete) {
     events.push({ type: "setup-complete" });
   }
 
-  const serverContent = asRecord(message.serverContent);
   if (serverContent) {
     events.push(...normalizeServerContent(serverContent));
   }
 
-  const toolCall = asRecord(message.toolCall);
   if (toolCall) {
     const event = normalizeToolCall(toolCall);
     if (event) events.push(event);
   }
 
-  const toolCallCancellation = asRecord(message.toolCallCancellation);
   if (toolCallCancellation && Array.isArray(toolCallCancellation.ids)) {
     events.push({
       type: "tool-cancellation",
@@ -139,7 +167,6 @@ export function normalizeLiveServerMessage(raw: unknown): LiveServerEvent[] {
     });
   }
 
-  const resumptionUpdate = asRecord(message.sessionResumptionUpdate);
   if (resumptionUpdate) {
     const newHandle = resumptionUpdate.newHandle;
     events.push({
@@ -149,7 +176,7 @@ export function normalizeLiveServerMessage(raw: unknown): LiveServerEvent[] {
     });
   }
 
-  if (has(message, "goAway")) {
+  if (hasGoAway) {
     const goAway = asRecord(message.goAway) ?? {};
     const timeLeft = goAway.timeLeft;
     events.push({
@@ -158,15 +185,15 @@ export function normalizeLiveServerMessage(raw: unknown): LiveServerEvent[] {
     });
   }
 
-  if (has(message, "error")) {
+  if (hasError) {
     const rawError = message.error;
-    const message_ = typeof rawError === "string"
+    const errorMessage = typeof rawError === "string"
       ? rawError
       : asRecord(rawError) && typeof (rawError as Record<string, unknown>).message === "string"
         ? ((rawError as Record<string, unknown>).message as string)
         : "Error desconocido de la sesión de voz";
-    events.push({ type: "error", message: message_ });
+    events.push({ type: "error", message: errorMessage });
   }
 
-  return events.length > 0 ? events : [UNKNOWN];
+  return events;
 }
